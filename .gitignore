@@ -1,0 +1,15 @@
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Airflow runtime state
+airflow.cfg
+airflow.db
+logs/
+simple_auth_manager_passwords.json.generated
+
+# Generated local data
+data/raw/
+
+# Common local/editor clutter
+.DS_Store
