@@ -1,4 +1,4 @@
-# Polymarket Gamma to Snowflake
+# PolyMetrics Gamma to Snowflake
 
 This repo now has a first-pass ingestion path for `data/raw/gamma/markets/*.json` into Snowflake.
 
@@ -17,10 +17,10 @@ This repo now has a first-pass ingestion path for `data/raw/gamma/markets/*.json
 
 ## Repo files
 
-- [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/polymarket/dags/gamma_markets_to_snowflake.py)
-- [src/polymarket_etl/market_files.py](/home/compute/l.d.stockbridge/polymarket/src/polymarket_etl/market_files.py)
-- [src/polymarket_etl/snowflake_sql.py](/home/compute/l.d.stockbridge/polymarket/src/polymarket_etl/snowflake_sql.py)
-- [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/polymarket/sql/snowflake/00_bootstrap_polymarket.sql)
+- [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py)
+- [src/polymarket_etl/market_files.py](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl/market_files.py)
+- [src/polymarket_etl/snowflake_sql.py](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl/snowflake_sql.py)
+- [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/Polymetrics/sql/snowflake/00_bootstrap_polymarket.sql)
 
 ## Airflow config
 
@@ -29,11 +29,11 @@ Set these environment variables in the Airflow runtime that will load the DAG:
 ```bash
 export POLYMARKET_SNOWFLAKE_CONN_ID=Snowflake
 export POLYMARKET_SNOWFLAKE_DATABASE=PANTHER_DB
-export POLYMARKET_MARKETS_DIR=/home/compute/l.d.stockbridge/polymarket/data/raw/gamma/markets
-export PYTHONPATH=/home/compute/l.d.stockbridge/polymarket/src:$PYTHONPATH
+export POLYMARKET_MARKETS_DIR=/home/compute/l.d.stockbridge/Polymetrics/data/raw/gamma/markets
+export PYTHONPATH=/home/compute/l.d.stockbridge/Polymetrics/src:$PYTHONPATH
 ```
 
-If you want this repo to act as its own `AIRFLOW_HOME`, see [standalone_airflow_home.md](/home/compute/l.d.stockbridge/polymarket/docs/standalone_airflow_home.md).
+If you want this repo to act as its own `AIRFLOW_HOME`, see [standalone_airflow_home.md](/home/compute/l.d.stockbridge/Polymetrics/docs/standalone_airflow_home.md).
 
 The DAG assumes the Airflow connection already exists and has permission to:
 
@@ -57,22 +57,22 @@ To run your Polymarket DAGs against that Airflow home, use environment overrides
 
 ```bash
 export AIRFLOW_HOME=/home/compute/l.d.stockbridge/airflow25
-export AIRFLOW__CORE__DAGS_FOLDER=/home/compute/l.d.stockbridge/polymarket/dags
+export AIRFLOW__CORE__DAGS_FOLDER=/home/compute/l.d.stockbridge/Polymetrics/dags
 export AIRFLOW__CORE__PLUGINS_FOLDER=/home/compute/l.d.stockbridge/airflow25/plugins
 export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////home/compute/l.d.stockbridge/airflow25/airflow.db
 export POLYMARKET_SNOWFLAKE_CONN_ID=Snowflake
 export POLYMARKET_SNOWFLAKE_DATABASE=PANTHER_DB
-export POLYMARKET_MARKETS_DIR=/home/compute/l.d.stockbridge/polymarket/data/raw/gamma/markets
-export PYTHONPATH=/home/compute/l.d.stockbridge/polymarket/src
+export POLYMARKET_MARKETS_DIR=/home/compute/l.d.stockbridge/Polymetrics/data/raw/gamma/markets
+export PYTHONPATH=/home/compute/l.d.stockbridge/Polymetrics/src
 ```
 
-If you prefer to keep both the old `urbanrides` DAG and the new Polymarket DAG visible at once, set:
+If you prefer to keep both the old `urbanrides` DAG and the new PolyMetrics DAG visible at once, set:
 
 ```bash
 export AIRFLOW__CORE__DAGS_FOLDER=/home/compute/l.d.stockbridge/airflow25/dags
 ```
 
-and then place a copy or symlink of [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/polymarket/dags/gamma_markets_to_snowflake.py) into [../airflow25/dags](/home/compute/l.d.stockbridge/airflow25/dags). I did not do that copy automatically because `airflow25` is outside this repo workspace.
+and then place a copy or symlink of [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py) into [../airflow25/dags](/home/compute/l.d.stockbridge/airflow25/dags). I did not do that copy automatically because `airflow25` is outside this repo workspace.
 
 ## Snowflake connection note
 
@@ -84,8 +84,8 @@ That means the Airflow connection exists, but if your current auth method is key
 
 ## First run
 
-1. Run [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/polymarket/sql/snowflake/00_bootstrap_polymarket.sql) manually if you want to validate object creation before Airflow.
-2. Copy or mount [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/polymarket/dags/gamma_markets_to_snowflake.py) into your Airflow `dags/` folder.
+1. Run [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/Polymetrics/sql/snowflake/00_bootstrap_polymarket.sql) manually if you want to validate object creation before Airflow.
+2. Copy or mount [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py) into your Airflow `dags/` folder.
 3. Make sure the repo `src/` directory is on Airflow `PYTHONPATH`.
 4. Trigger `gamma_markets_to_snowflake`.
 

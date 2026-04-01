@@ -1,8 +1,8 @@
-# Polymarket Airflow Runbook
+# PolyMetrics Airflow Runbook
 
 ## Scope
 
-This repo runs the DAG [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/polymarket/dags/gamma_markets_to_snowflake.py) to load Polymarket Gamma files into Snowflake (`PANTHER_DB`).
+This repo runs the DAG [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py) to load Polymarket Gamma files into Snowflake (`PANTHER_DB`).
 
 ## Proven Rules
 
@@ -16,14 +16,14 @@ This repo runs the DAG [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbr
 Source env first:
 
 ```bash
-cd /home/compute/l.d.stockbridge/polymarket
+cd /home/compute/l.d.stockbridge/Polymetrics
 source airflow_home.env.example
 ```
 
 Expected key settings from env:
 
-- `AIRFLOW_HOME=/home/compute/l.d.stockbridge/polymarket`
-- `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////tmp/polymarket_airflow.db`
+- `AIRFLOW_HOME=/home/compute/l.d.stockbridge/Polymetrics`
+- `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=sqlite:////tmp/polymetrics_airflow.db`
 - `POLYMARKET_SNOWFLAKE_CONN_ID=Snowflake`
 - `POLYMARKET_SNOWFLAKE_DATABASE=PANTHER_DB`
 
@@ -31,7 +31,7 @@ Expected key settings from env:
 
 ```bash
 qlogin-airflow25 -c 4
-cd /home/compute/l.d.stockbridge/polymarket
+cd /home/compute/l.d.stockbridge/Polymetrics
 source airflow_home.env.example
 airflow db migrate
 ```
@@ -41,7 +41,7 @@ airflow db migrate
 Run this exact sequence before each fresh DAG trigger:
 
 ```bash
-cd /home/compute/l.d.stockbridge/polymarket
+cd /home/compute/l.d.stockbridge/Polymetrics
 source airflow_home.env.example
 
 # 1) stop all airflow processes owned by current user
@@ -70,7 +70,7 @@ finally:
 done
 
 # 3) fail stale runs in local metadata db
-sqlite3 /tmp/polymarket_airflow.db "
+sqlite3 /tmp/polymetrics_airflow.db "
 UPDATE dag_run
 SET state='failed', end_date=CURRENT_TIMESTAMP
 WHERE dag_id='gamma_markets_to_snowflake'
@@ -78,7 +78,7 @@ WHERE dag_id='gamma_markets_to_snowflake'
 "
 
 # 4) start stack
-nohup airflow standalone > /tmp/polymarket_standalone.log 2>&1 &
+nohup airflow standalone > /tmp/polymetrics_standalone.log 2>&1 &
 sleep 20
 
 # 5) health checks
@@ -100,7 +100,7 @@ qlogin-airflow25 -c 4
 airflow connections delete Snowflake || true
 airflow connections add Snowflake \
   --conn-type snowflake \
-  --conn-description 'Polymarket Snowflake key auth' \
+  --conn-description 'PolyMetrics Snowflake key auth' \
   --conn-login PANTHER \
   --conn-schema PUBLIC \
   --conn-password '' \
@@ -136,7 +136,7 @@ find logs -type f | grep "run_id=$RUN_ID/task_id=$TASK_ID" | tail -n 1 | xargs t
 Runtime-level errors:
 
 ```bash
-grep -n "ERROR\\|Traceback\\|execution/task-instances\\|Address already in use" /tmp/polymarket_standalone.log | tail -n 60
+grep -n "ERROR\\|Traceback\\|execution/task-instances\\|Address already in use" /tmp/polymetrics_standalone.log | tail -n 60
 ```
 
 ## Snowflake Validation Queries

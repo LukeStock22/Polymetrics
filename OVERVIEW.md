@@ -84,8 +84,7 @@ That separation is healthy and should make the project easier to extend.
 
 There are a few structural and naming issues that will become more painful as the project grows:
 
-- The repository directory is named `Polymetrics`, but many docs and config values refer to `polymarket`. That mismatch will confuse both humans and Airflow configuration.
-- The repo currently mixes source-controlled project code with Airflow runtime state such as `airflow.cfg`, `airflow.db`, and `logs/`. That is acceptable for local experimentation, but it blurs the line between code and runtime artifacts.
+- The repo still mixes source-controlled project code with Airflow runtime state such as `airflow.cfg`, `airflow.db`, and `logs/`. That is acceptable for local experimentation, but it blurs the line between code and runtime artifacts.
 - The current docs emphasize the Gamma market-page ingestion path, while the proposal describes a much broader analytics product including user-level trading analysis and live data. The repo structure can support that vision, but the documentation should make clear that ingestion is the current phase, not the entire project.
 
 ## Recommended Direction
@@ -105,6 +104,6 @@ My current understanding is:
 - PolyMetrics is intended to be a Polymarket data and analytics platform.
 - The proposal’s end goal is trader- and market-level analytics, ideally combining historical and live data.
 - The current repository is in the warehouse-ingestion phase, centered on loading Polymarket Gamma market data into Snowflake through Airflow.
-- The folder structure is broadly good for that phase, with the main weakness being naming/config inconsistency and the presence of local Airflow runtime files in the repo root.
+- The folder structure is broadly good for that phase, with the main weakness being the presence of local Airflow runtime files in the repo root and a still-narrow scope compared with the full project vision.
 
-In short, the organization mostly makes sense and gives the project room to grow, but it would benefit from cleaning up the repo/runtime boundary and standardizing the project name across paths and docs.
+In short, the organization mostly makes sense and gives the project room to grow, but it would benefit from cleaning up the repo/runtime boundary and expanding beyond the initial Gamma ingestion path.

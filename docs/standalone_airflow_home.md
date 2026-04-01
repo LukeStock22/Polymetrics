@@ -1,21 +1,21 @@
 # Standalone Airflow Home Setup
 
-This guide explains how to make the `polymarket` repo its own Airflow home instead of reusing `airflow25`.
+This guide explains how to make the `Polymetrics` repo its own Airflow home instead of reusing `airflow25`.
 
 ## Resulting layout
 
 After setup, this repo acts as `AIRFLOW_HOME` and contains:
 
-- [dags](/home/compute/l.d.stockbridge/polymarket/dags)
-- [plugins](/home/compute/l.d.stockbridge/polymarket/plugins)
-- [logs](/home/compute/l.d.stockbridge/polymarket/logs)
+- [dags](/home/compute/l.d.stockbridge/Polymetrics/dags)
+- [plugins](/home/compute/l.d.stockbridge/Polymetrics/plugins)
+- [logs](/home/compute/l.d.stockbridge/Polymetrics/logs)
 - `airflow.db`
 - `airflow.cfg`
 
 The pipeline code itself remains in:
 
-- [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/polymarket/dags/gamma_markets_to_snowflake.py)
-- [src/polymarket_etl](/home/compute/l.d.stockbridge/polymarket/src/polymarket_etl)
+- [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py)
+- [src/polymarket_etl](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl)
 
 ## What to copy from `airflow25`
 
@@ -70,7 +70,7 @@ inside the active SQLite path if they do not already exist.
 
 Current recommended metadata DB:
 
-- `/tmp/polymarket_airflow.db`
+- `/tmp/polymetrics_airflow.db`
 
 Why `/tmp` instead of the repo directory:
 
@@ -180,7 +180,7 @@ The difference between the two approaches is simple:
 
 - reusing `airflow25`
   - one shared Airflow home for multiple projects
-- standalone `polymarket`
+- standalone `Polymetrics`
   - this repo contains both the project code and the Airflow runtime state
 
 The standalone layout is easier to reason about because everything related to this pipeline lives in one place.
