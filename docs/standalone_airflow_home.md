@@ -42,7 +42,16 @@ The commands below must be run in a shell that already has:
 If this command fails, you are not in the right runtime yet:
 
 ```bash
+qlogin-airflow25
 airflow version
+```
+
+For this repo, the proven startup pattern is:
+
+```bash
+qlogin-airflow25
+cd /home/compute/l.d.stockbridge/Polymetrics
+source airflow_home.env.example
 ```
 
 ## Step 2: Point Airflow at this repo

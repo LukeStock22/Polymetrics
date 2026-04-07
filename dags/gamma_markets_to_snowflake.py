@@ -110,7 +110,7 @@ def put_files_to_stage(files: Iterable[Path]) -> None:
     schedule=None,
     start_date=datetime(2026, 3, 1),
     catchup=False,
-    default_args={"owner": "codex"},
+    default_args={"owner": "polymetrics"},
     tags=["polymarket", "gamma", "snowflake"],
 )
 def gamma_markets_to_snowflake():

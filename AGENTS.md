@@ -13,12 +13,15 @@ This repo runs the DAG [gamma_markets_to_snowflake.py](/home/compute/l.d.stockbr
 
 ## Environment
 
-Source env first:
+Start from the working Airflow shell first, then source the repo env:
 
 ```bash
+qlogin-airflow25
 cd /home/compute/l.d.stockbridge/Polymetrics
 source airflow_home.env.example
 ```
+
+This is the proven startup pattern for this repo. If you skip `qlogin-airflow25`, `airflow` may not be on `PATH`.
 
 Expected key settings from env:
 
@@ -35,6 +38,30 @@ cd /home/compute/l.d.stockbridge/Polymetrics
 source airflow_home.env.example
 airflow db migrate
 ```
+
+## Quick Preflight Check
+
+Use this exact sequence when you want to confirm the repo can still see Airflow, load DAGs, and connect to Snowflake without changing pipeline data:
+
+```bash
+qlogin-airflow25
+cd /home/compute/l.d.stockbridge/Polymetrics
+source airflow_home.env.example
+
+airflow version
+airflow db migrate
+airflow dags reserialize
+airflow dags list
+airflow connections get Snowflake
+python -c "from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook; print(SnowflakeHook(snowflake_conn_id='Snowflake').get_first('SELECT CURRENT_ACCOUNT(), CURRENT_USER(), CURRENT_WAREHOUSE(), CURRENT_DATABASE(), CURRENT_ROLE()'))"
+```
+
+Expected signs of success:
+
+- `airflow version` returns a version instead of `command not found`
+- `airflow dags list` shows `gamma_markets_to_snowflake`
+- `airflow connections get Snowflake` returns a real connection
+- the Python check returns current Snowflake session values
 
 ## Reliable Clean Restart Procedure
 
