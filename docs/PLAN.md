@@ -17,7 +17,7 @@ Right now the repo already proves an important first step:
 - Snowflake can receive and store Polymarket data
 - the Gamma market-page path is working as a first ingestion slice
 
-That is a good foundation, but it is still only a small fraction of the actual project objective in [PROPOSAL.md](/home/compute/l.d.stockbridge/Polymetrics/PROPOSAL.md).
+That is a good foundation, but it is still only a small fraction of the actual project objective in [PROPOSAL.md](/home/compute/l.d.stockbridge/Polymetrics/docs/PROPOSAL.md).
 
 ## Guiding Principles
 
