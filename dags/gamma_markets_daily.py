@@ -40,6 +40,7 @@ def get_snowflake_hook():
 @dag(
     dag_id="gamma_markets_daily",
     schedule="10 0 * * *",
+    # schedule="33 * * * *",
     start_date=pendulum.datetime(2026, 4, 7, tz="America/Chicago"),
     catchup=False,
     max_active_runs=1,
@@ -49,12 +50,30 @@ def get_snowflake_hook():
 def gamma_markets_daily():
     @task()
     def compute_window() -> Dict[str, str]:
+        from airflow.exceptions import AirflowSkipException
         from airflow.sdk import get_current_context
 
         ctx = get_current_context()
         tz = pendulum.timezone("America/Chicago")
-        start = pendulum.instance(ctx["data_interval_start"]).in_timezone(tz)
-        end = pendulum.instance(ctx["data_interval_end"]).in_timezone(tz)
+        interval_start = pendulum.instance(ctx["data_interval_start"]).in_timezone(tz)
+        interval_end = pendulum.instance(ctx["data_interval_end"]).in_timezone(tz)
+        now = pendulum.now(tz)
+        end = interval_end if interval_end >= now else now
+
+        hook = get_snowflake_hook()
+        watermark = hook.get_first(
+            f"SELECT MAX(updated_at) FROM {SNOWFLAKE_DATABASE}.CURATED.GAMMA_MARKETS"
+        )[0]
+        if watermark:
+            if watermark.tzinfo is None:
+                start = pendulum.instance(watermark, tz="UTC").in_timezone(tz)
+            else:
+                start = pendulum.instance(watermark).in_timezone(tz)
+        else:
+            start = interval_start
+
+        if start >= end:
+            raise AirflowSkipException("Watermark is already current — nothing to update.")
         return {
             "start": start.to_iso8601_string(),
             "end": end.to_iso8601_string(),

@@ -100,6 +100,11 @@ airflow tasks states-for-dag-run gamma_markets_catchup "$RUN_ID"
 ```
 
 The catch-up DAG runs a single reconciliation window from the current watermark to yesterday midnight. Closed markets are filtered by `end_date_min`/`end_date_max`, so it avoids scanning the full closed history every run.
+The daily DAG uses the Airflow data interval but will also respect the latest `updated_at` watermark (it extends the window up to “now” and starts from the most recent curated update).
+Concretely:
+
+- `start` = `MAX(updated_at)` from `CURATED.GAMMA_MARKETS`
+- `end` = max(`data_interval_end`, `now`) at runtime
 
 ## 6) Start the Airflow services (for scheduled runs)
 
@@ -120,3 +125,4 @@ curl -s http://127.0.0.1:8080/api/v2/monitor/health
 - Always run Airflow in the same `qlogin-airflow25` session you used to initialize the DB.
 - If the session ends, scheduled jobs will stop until Airflow is restarted.
 - On a new node, treat the startup as a reconnect: run `airflow db migrate`, recreate or verify `Snowflake`, then run `airflow dags reserialize` before triggering the catch-up DAG.
+ - If a daily run fails before `upsert_curated_markets`, the watermark does not advance. If it fails after `upsert_curated_markets` (for example, in a DQ check), curated has already been updated so the watermark has advanced even though the DAG is marked failed.
