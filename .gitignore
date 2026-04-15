@@ -13,3 +13,9 @@ data/raw/
 
 # Common local/editor clutter
 .DS_Store
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+rsa_key_airflow.p8
+secrets.toml
