@@ -156,6 +156,11 @@ The build script creates tables in this rough order:
    - `HIGHEST_VOLUME_MARKETS`
    - `MARKET_TOP_TRADERS_DAILY`
    - `MARKET_TOP_TRADERS_ALL_TIME`
+   - `MARKET_CONCENTRATION_DAILY`
+   - `PLATFORM_DAILY_SUMMARY`
+   - `TRADER_SEGMENT_SNAPSHOT`
+   - `TRADER_COHORT_MONTHLY`
+   - `MARKET_THEME_DAILY`
 
 ## Analytics tables
 
@@ -190,6 +195,11 @@ Core fields:
 - `LISTED_VOLUME_USDC`
 - `OUTCOMES`
 - `CLOB_TOKEN_IDS`
+- `MARKET_GROUP_TITLE`
+- `EVENT_TITLE`
+- `EVENT_SLUG`
+- `MARKET_THEME`
+- `MARKET_THEME_SOURCE`
 
 Purpose:
 
@@ -690,13 +700,104 @@ Purpose:
 
 - app-facing all-time trader drill-down for a selected market
 
+### `PANTHER_DB.ANALYTICS.MARKET_CONCENTRATION_DAILY`
+
+Grain:
+
+- one row per market and day
+
+Primary sources:
+
+- `PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY`
+- `PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_DAILY`
+
+Purpose:
+
+- materializes top-1 and top-5 share-of-volume metrics by market/day
+- strengthens the whale-dominance story beyond the earlier `volume per trader` proxy
+- powers the Streamlit whale/concentration view with a warehouse-built concentration mart
+
+### `PANTHER_DB.ANALYTICS.PLATFORM_DAILY_SUMMARY`
+
+Grain:
+
+- one row per trading day
+
+Primary sources:
+
+- `PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY`
+- `PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY`
+
+Purpose:
+
+- precomputed day-level platform summary mart
+- avoids live aggregation of lower-level daily facts in Streamlit
+- powers the Streamlit daily-volume time-series question
+
+### `PANTHER_DB.ANALYTICS.TRADER_SEGMENT_SNAPSHOT`
+
+Grain:
+
+- one row per trader snapshot
+
+Primary sources:
+
+- `PANTHER_DB.ANALYTICS.DIM_TRADERS`
+
+Purpose:
+
+- assigns percentile buckets for total volume, total trades, diversification, and average trade size
+- makes trader segmentation presentation-ready
+- supports the Streamlit `What Separates Big Traders From Small Traders?` question
+
+### `PANTHER_DB.ANALYTICS.TRADER_COHORT_MONTHLY`
+
+Grain:
+
+- one row per trader cohort month and activity month
+
+Primary sources:
+
+- `PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY`
+- `PANTHER_DB.ANALYTICS.DIM_TRADERS`
+
+Purpose:
+
+- compresses wallet history into cohort/lifecycle analytics
+- supports retention-style and lifecycle-style views without scanning raw trade history
+- powers the Streamlit trader cohort view
+
+### `PANTHER_DB.ANALYTICS.MARKET_THEME_DAILY`
+
+Grain:
+
+- one row per trade day and normalized market theme
+
+Primary sources:
+
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
+- `PANTHER_DB.ANALYTICS.DIM_MARKETS`
+
+Purpose:
+
+- groups markets into a reusable “bet theme” layer using PANTHER metadata
+- uses `GROUP_ITEM_TITLE` first and event title as a fallback, so the theme is source-driven rather than keyword-driven
+- supports analytics on what kinds of bets attract the most dollars or the broadest participation
+- powers the Streamlit `Top Bet Themes Today` and `Bet Themes With Most Unique Traders Today` views
+
 ## What questions this layer can support
 
 This v2 design is broader than the current Streamlit UI. It can support questions such as:
 
 - Which markets have the most volume today?
+- Which markets are highly concentrated among a few large traders?
 - Which markets have the highest listed lifetime volume?
+- How much money was traded across the platform each day?
+- Which bet themes have the most traded volume today?
+- Which bet themes attract the broadest trader participation?
 - Which wallets trade the most across days?
+- What separates high-volume traders from the rest of the population?
+- How do trader cohorts behave after first activity month?
 - Which traders dominate a given market?
 - Which markets have the widest spreads?
 - Which markets show unusual trading or anomaly counts?
@@ -737,6 +838,12 @@ This is important architecturally because:
 - business logic lives in reusable warehouse tables
 - future questions can reuse the same facts and dimensions
 
+The later marts added for concentration, platform summary, trader segmentation, trader cohorts, and market themes are especially useful for presentation because they show a mature analytics pattern:
+
+- lower-level facts capture reusable event or aggregate grains
+- higher-level marts precompute story-ready questions for the dashboard
+- the app reads marts instead of repeatedly aggregating large lower-level tables live
+
 ## Future orchestration
 
 The most natural next step is to schedule this build.
@@ -754,3 +861,105 @@ Two reasonable options:
 - schedule refresh directly inside Snowflake
 
 For this repo, Airflow is the cleaner near-term fit because the project already uses DAGs for upstream ingestion.
+
+## Incremental build design decision
+
+The original analytics-layer build used a full rebuild strategy.
+
+That approach was correct but expensive because it repeatedly recomputed large COYOTE-derived facts from hundreds of millions of user-activity rows, even when only a small amount of new data had arrived.
+
+To improve this, the build script was updated to support an incremental mode driven by `COYOTE_DB.PUBLIC.CURATED_POLYMARKET_USER_ACTIVITY._LOADED_AT`.
+
+The incremental strategy now does the following:
+
+- reads only newly loaded COYOTE trade rows since the previous successful build watermark
+- merges those rows into `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
+- identifies the impacted trade dates, market conditions, and wallets
+- recomputes only the downstream slices affected by that delta
+- leaves unchanged portions of the analytics layer untouched
+
+This is an important analytics architecture decision for the project because it demonstrates that the warehouse layer is not just storing data; it is also managing change efficiently at scale.
+
+## Incremental benchmark result
+
+### Full rebuild baseline
+
+Reference full rebuild runtime:
+
+- total runtime: `3,682.8s`
+- total runtime: `61m 22.8s`
+
+Largest steps in the full rebuild:
+
+- `FACT_MARKET_DAILY`: `1,659.3s`
+- `FACT_USER_ACTIVITY_TRADES`: `889.9s`
+- `MARKET_TOP_TRADERS_DAILY`: `422.9s`
+- `MARKET_TOP_TRADERS_ALL_TIME`: `333.4s`
+- `FACT_WALLET_DAILY`: `214.2s`
+
+### Incremental rebuild result
+
+Validated incremental run:
+
+- COYOTE trade delta: `114,066` rows
+- delta as share of current trade fact: `0.0152%`
+- impacted trade dates: `43`
+- impacted market conditions: `3,603`
+- impacted wallets: `108`
+
+Incremental runtime by step:
+
+- `FACT_USER_ACTIVITY_TRADES` merge: `72.9s`
+- `FACT_MARKET_DAILY` replace: `366.9s`
+- `FACT_WALLET_DAILY` replace: `68.9s`
+- `DIM_TRADERS` replace: `42.0s`
+- `TRACKED_MARKET_VOLUME_DAILY` replace: `12.2s`
+- `MARKET_TOP_TRADERS_DAILY` replace: `152.0s`
+- `MARKET_TOP_TRADERS_ALL_TIME` replace: `73.6s`
+- `HIGHEST_VOLUME_MARKETS` rebuild: `2.9s`
+
+Incremental total runtime:
+
+- total runtime: `810.9s`
+- total runtime: `13m 30.9s`
+
+### Measured improvement
+
+Compared with the full rebuild baseline:
+
+- time saved: `2,871.9s`
+- time saved: `47m 51.9s`
+- speedup: `4.54x`
+- runtime reduction: `77.98%`
+
+This is the current headline performance result for the project presentation: the same analytics layer now completes in about `13.5` minutes instead of about `61.4` minutes when only a tiny fraction of source trade data has changed.
+
+## What the benchmark tells us
+
+The incremental system is now functional end to end.
+
+Evidence:
+
+- the build enters incremental mode successfully
+- it detects the COYOTE delta correctly
+- it updates all downstream analytics tables without failing
+- it records a meaningful runtime reduction relative to the full rebuild
+
+The remaining bottlenecks are still concentrated in a small number of downstream aggregations:
+
+- `FACT_MARKET_DAILY`
+- `MARKET_TOP_TRADERS_DAILY`
+
+That means the next optimization work should focus on reducing recomputation inside those two tables, especially for date-scoped aggregations.
+
+## Presentation takeaway
+
+For a data management at scale course, the main message is:
+
+- `PANTHER`, `COYOTE`, and `DOG` act as source systems
+- `PANTHER_DB.ANALYTICS` is the derived warehouse analytics layer
+- Snowpark performs large-scale transformations inside Snowflake
+- Streamlit is only the presentation layer
+- incremental warehouse builds materially improve performance without increasing warehouse size
+
+This gives a defensible story about both architecture and scalability, not just about dashboard output.
