@@ -56,6 +56,12 @@ This matters for a data management at scale class because it gives you a defensi
 
 ## Source systems
 
+The analytics layer follows this source-of-truth model:
+
+- `PANTHER` is authoritative for market metadata
+- `COYOTE` is authoritative for user-level transaction activity
+- `DOG` provides supplemental raw feeds and teammate-owned derived/enrichment tables
+
 The analytics layer currently draws from these upstream tables.
 
 ### Market dimension source
@@ -69,23 +75,39 @@ Purpose:
 - source of `condition_id`, labels, status, liquidity, and listed volume
 - source of token/outcome arrays used to build asset mappings
 
-### DOG trade sources
+### Authoritative transaction source
+
+- `COYOTE_DB.PUBLIC.CURATED_POLYMARKET_USER_ACTIVITY`
+
+Purpose:
+
+- canonical user-level transaction feed
+- source of wallet, side, outcome, price, size, and traded USDC fields
+- source of truth for market-volume and top-trader analytics
+
+### DOG raw supplemental sources
 
 - `DOG_DB.DOG_SCHEMA.DATA_API_TRADES`
 - `DOG_DB.DOG_SCHEMA.CLOB_TRADES_STREAM`
 - `DOG_DB.DOG_SCHEMA.CLOB_BOOK_SNAPSHOTS`
 - `DOG_DB.DOG_SCHEMA.LEADERBOARD_USERS`
-- `DOG_DB.DOG_SCHEMA.DETECTED_ANOMALIES`
 
 Purpose:
 
-- trade facts
+- supplemental trade and market microstructure facts
 - market microstructure facts
 - leaderboard enrichment
-- anomaly detection facts
 
-### DOG transformed sources
+Interpretation:
 
+- `DATA_API_TRADES`: raw Polymarket API data
+- `CLOB_TRADES_STREAM`: raw CLOB stream data
+- `CLOB_BOOK_SNAPSHOTS`: raw CLOB book snapshot data
+- `LEADERBOARD_USERS`: raw leaderboard snapshot data
+
+### DOG derived supplemental sources
+
+- `DOG_DB.DOG_SCHEMA.DETECTED_ANOMALIES`
 - `DOG_DB.DOG_TRANSFORM.MARKET_DAILY_STATS`
 - `DOG_DB.DOG_TRANSFORM.WALLET_DAILY_STATS`
 - `DOG_DB.DOG_TRANSFORM.ANOMALY_ATTRIBUTION`
@@ -93,10 +115,13 @@ Purpose:
 
 Purpose:
 
-- possible higher-level teammate-provided transforms
+- anomaly detection output
+- teammate-provided higher-level transforms and risk features
 
-Current caveat:
+Current assessment:
 
+- there is no evidence in this repo that DOG derived tables are built from COYOTE
+- they appear to be teammate-owned DOG-side derived datasets based on their own pipelines
 - at implementation time, most of these `DOG_TRANSFORM` tables were empty, so the analytics layer does **not** depend on them for its core daily market and wallet aggregations
 - `TRADER_RISK_PROFILES` is joined when populated, but its fields may be null if the table remains empty
 
@@ -114,18 +139,19 @@ The analytics schema uses a simple model:
 The build script creates tables in this rough order:
 
 1. `DIM_MARKETS`
-2. `BRIDGE_MARKET_ASSETS`
-3. `FACT_DATA_API_TRADES`
-4. `FACT_CLOB_TRADES`
-5. `FACT_BOOK_SNAPSHOTS`
-6. `FACT_LEADERBOARD_USER_SNAPSHOTS`
-7. `DIM_LEADERBOARD_USERS`
-8. `FACT_ANOMALIES`
-9. `FACT_ANOMALY_ATTRIBUTION`
-10. `FACT_MARKET_DAILY`
-11. `FACT_WALLET_DAILY`
-12. `DIM_TRADERS`
-13. app-facing tables:
+2. `FACT_USER_ACTIVITY_TRADES`
+3. `BRIDGE_MARKET_ASSETS`
+4. `FACT_DATA_API_TRADES`
+5. `FACT_CLOB_TRADES`
+6. `FACT_BOOK_SNAPSHOTS`
+7. `FACT_LEADERBOARD_USER_SNAPSHOTS`
+8. `DIM_LEADERBOARD_USERS`
+9. `FACT_ANOMALIES`
+10. `FACT_ANOMALY_ATTRIBUTION`
+11. `FACT_MARKET_DAILY`
+12. `FACT_WALLET_DAILY`
+13. `DIM_TRADERS`
+14. app-facing tables:
    - `TRACKED_MARKET_VOLUME_DAILY`
    - `HIGHEST_VOLUME_MARKETS`
    - `MARKET_TOP_TRADERS_DAILY`
@@ -230,14 +256,54 @@ Core fields:
 
 Purpose:
 
-- the current primary trade fact for warehouse analytics
-- source for daily market aggregates
-- source for wallet aggregates
-- source for trader rankings
+- supplemental DOG data-api trade fact
+- useful for reconciling COYOTE trades against an external API feed
+- available for future comparison and data-quality checks
 
 Important caveat:
 
 - some DOG trades do not map to `DIM_MARKETS`, so `MARKET_ID` can be null for unmatched `CONDITION_ID`s
+
+### `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
+
+Grain:
+
+- one row per COYOTE `TRADE` activity row
+
+Primary sources:
+
+- `COYOTE_DB.PUBLIC.CURATED_POLYMARKET_USER_ACTIVITY`
+- enriched with `PANTHER_DB.ANALYTICS.DIM_MARKETS`
+
+Core fields:
+
+- `TRADE_DATE`
+- `TRADE_TS`
+- `MARKET_ID`
+- `CONDITION_ID`
+- `MARKET_QUESTION`
+- `MARKET_LABEL`
+- `ACTIVE`
+- `CLOSED`
+- `PROXY_WALLET`
+- `ASSET_ID`
+- `TRADE_SIDE`
+- `OUTCOME_NAME`
+- `OUTCOME_INDEX`
+- `PRICE`
+- `SIZE`
+- `USDC_VOLUME`
+- `TRANSACTION_HASH`
+- `ACTIVITY_TYPE`
+- `SOURCE_SYSTEM`
+
+Purpose:
+
+- the primary trade fact for warehouse analytics
+- source for daily market aggregates
+- source for wallet aggregates
+- source for trader rankings
+- aligns the analytics layer with COYOTE as the transaction source of truth
 
 ### `PANTHER_DB.ANALYTICS.FACT_CLOB_TRADES`
 
@@ -452,7 +518,7 @@ Grain:
 
 Primary sources:
 
-- `PANTHER_DB.ANALYTICS.FACT_DATA_API_TRADES`
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
 - `PANTHER_DB.ANALYTICS.FACT_ANOMALIES`
 
 Core fields:
@@ -489,7 +555,7 @@ Purpose:
 
 Important note:
 
-- this table is currently derived from `FACT_DATA_API_TRADES`, not from the empty teammate `DOG_TRANSFORM.MARKET_DAILY_STATS`
+- this table is currently derived from `FACT_USER_ACTIVITY_TRADES`, not from the empty teammate `DOG_TRANSFORM.MARKET_DAILY_STATS`
 
 ### `PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY`
 
@@ -499,7 +565,7 @@ Grain:
 
 Primary sources:
 
-- `PANTHER_DB.ANALYTICS.FACT_DATA_API_TRADES`
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
 - `PANTHER_DB.ANALYTICS.FACT_ANOMALY_ATTRIBUTION`
 
 Core fields:
@@ -529,7 +595,7 @@ Grain:
 
 Primary sources:
 
-- `PANTHER_DB.ANALYTICS.FACT_DATA_API_TRADES`
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
 - `PANTHER_DB.ANALYTICS.DIM_LEADERBOARD_USERS`
 - `PANTHER_DB.ANALYTICS.FACT_ANOMALY_ATTRIBUTION`
 - `DOG_DB.DOG_TRANSFORM.TRADER_RISK_PROFILES`
@@ -604,7 +670,7 @@ Grain:
 
 Primary sources:
 
-- derived from `PANTHER_DB.ANALYTICS.FACT_DATA_API_TRADES`
+- derived from `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
 
 Purpose:
 
@@ -618,7 +684,7 @@ Grain:
 
 Primary sources:
 
-- derived from `PANTHER_DB.ANALYTICS.FACT_DATA_API_TRADES`
+- derived from `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
 
 Purpose:
 
