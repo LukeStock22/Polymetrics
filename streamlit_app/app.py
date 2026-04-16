@@ -20,6 +20,10 @@ QUESTION_HIGHEST_VOLUME = "Highest Volume Markets"
 class AppConfig:
     user_activity_table: str
     markets_table: str
+    tracked_market_volume_daily_table: str
+    highest_volume_markets_table: str
+    market_top_traders_daily_table: str
+    market_top_traders_all_time_table: str
     timezone: str
     default_market_limit: int
     default_trader_limit: int
@@ -29,7 +33,7 @@ def validate_identifier(value: str, label: str) -> str:
     if not value or not IDENTIFIER_PATTERN.fullmatch(value):
         raise ValueError(
             f"{label} must be an unquoted Snowflake identifier such as "
-            "CURATED_POLYMARKET_USER_ACTIVITY or DB.SCHEMA.TABLE."
+            "PANTHER_DB.ANALYTICS.TRACKED_MARKET_VOLUME_DAILY."
         )
     return value
 
@@ -60,6 +64,34 @@ def load_app_config() -> AppConfig:
             app_settings.get("markets_table", "PANTHER_DB.CURATED.GAMMA_MARKETS"),
             "app.markets_table",
         ),
+        tracked_market_volume_daily_table=validate_identifier(
+            app_settings.get(
+                "tracked_market_volume_daily_table",
+                "PANTHER_DB.ANALYTICS.TRACKED_MARKET_VOLUME_DAILY",
+            ),
+            "app.tracked_market_volume_daily_table",
+        ),
+        highest_volume_markets_table=validate_identifier(
+            app_settings.get(
+                "highest_volume_markets_table",
+                "PANTHER_DB.ANALYTICS.HIGHEST_VOLUME_MARKETS",
+            ),
+            "app.highest_volume_markets_table",
+        ),
+        market_top_traders_daily_table=validate_identifier(
+            app_settings.get(
+                "market_top_traders_daily_table",
+                "PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_DAILY",
+            ),
+            "app.market_top_traders_daily_table",
+        ),
+        market_top_traders_all_time_table=validate_identifier(
+            app_settings.get(
+                "market_top_traders_all_time_table",
+                "PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_ALL_TIME",
+            ),
+            "app.market_top_traders_all_time_table",
+        ),
         timezone=validate_timezone(app_settings.get("timezone", "America/Chicago")),
         default_market_limit=max(5, int(app_settings.get("default_market_limit", 10))),
         default_trader_limit=max(5, int(app_settings.get("default_trader_limit", 15))),
@@ -84,180 +116,100 @@ def get_today_for_timezone() -> date:
     return current_day.iloc[0]["TODAY"]
 
 
+def rename_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns={column: column.lower() for column in df.columns})
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_tracked_markets_for_day(selected_date: str, market_limit: int) -> pd.DataFrame:
     app_config = load_app_config()
     session = get_session()
     query = f"""
-        WITH markets_dedup AS (
-            SELECT
-                market_id,
-                condition_id,
-                question,
-                slug,
-                active,
-                closed,
-                updated_at,
-                transformed_at
-            FROM {app_config.markets_table}
-            WHERE condition_id IS NOT NULL
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY condition_id
-                ORDER BY updated_at DESC NULLS LAST, transformed_at DESC NULLS LAST, market_id
-            ) = 1
-        ),
-        trades_for_day AS (
-            SELECT
-                TO_TIMESTAMP_NTZ(timestamp) AS trade_ts,
-                proxyWallet AS proxy_wallet,
-                conditionId AS condition_id,
-                TRY_TO_DOUBLE(usdcSize) AS usdc_size
-            FROM {app_config.user_activity_table}
-            WHERE type = 'TRADE'
-              AND conditionId IS NOT NULL
-              AND TO_DATE(TO_TIMESTAMP_NTZ(timestamp)) = '{selected_date}'
-        )
         SELECT
-            markets_dedup.market_id,
-            markets_dedup.condition_id,
-            COALESCE(markets_dedup.question, markets_dedup.slug, markets_dedup.market_id) AS question,
-            COALESCE(markets_dedup.slug, markets_dedup.question, markets_dedup.market_id) AS market_label,
-            COALESCE(markets_dedup.active, FALSE) AS active,
-            COALESCE(markets_dedup.closed, FALSE) AS closed,
-            COUNT(*) AS trade_count,
-            COUNT(DISTINCT trades_for_day.proxy_wallet) AS unique_traders,
-            ROUND(SUM(COALESCE(trades_for_day.usdc_size, 0)), 2) AS total_volume_usdc,
-            MIN(trades_for_day.trade_ts) AS first_trade_ts,
-            MAX(trades_for_day.trade_ts) AS last_trade_ts
-        FROM trades_for_day
-        JOIN markets_dedup
-          ON trades_for_day.condition_id = markets_dedup.condition_id
-        GROUP BY 1, 2, 3, 4, 5, 6
+            trade_date,
+            market_id,
+            condition_id,
+            market_question,
+            market_label,
+            active,
+            closed,
+            trade_count,
+            unique_traders,
+            total_volume_usdc,
+            first_trade_ts,
+            last_trade_ts
+        FROM {app_config.tracked_market_volume_daily_table}
+        WHERE trade_date = '{selected_date}'
         ORDER BY total_volume_usdc DESC, trade_count DESC, market_label ASC
         LIMIT {market_limit}
     """
-    data = session.sql(query).to_pandas()
-    if data.empty:
-        return data
-    return data.rename(
-        columns={
-            "MARKET_ID": "market_id",
-            "CONDITION_ID": "condition_id",
-            "QUESTION": "question",
-            "MARKET_LABEL": "market_label",
-            "ACTIVE": "active",
-            "CLOSED": "closed",
-            "TRADE_COUNT": "trade_count",
-            "UNIQUE_TRADERS": "unique_traders",
-            "TOTAL_VOLUME_USDC": "total_volume_usdc",
-            "FIRST_TRADE_TS": "first_trade_ts",
-            "LAST_TRADE_TS": "last_trade_ts",
-        }
-    )
+    return rename_columns(session.sql(query).to_pandas())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_highest_volume_markets(market_limit: int, active_only: bool) -> pd.DataFrame:
     app_config = load_app_config()
     session = get_session()
-    active_filter = "AND COALESCE(active, FALSE) = TRUE" if active_only else ""
+    active_filter = "WHERE closed = FALSE" if active_only else ""
     query = f"""
-        WITH markets_dedup AS (
-            SELECT
-                market_id,
-                condition_id,
-                question,
-                slug,
-                active,
-                closed,
-                end_date,
-                updated_at,
-                transformed_at,
-                COALESCE(volume_num, volume, volume_clob, 0) AS total_volume_usdc
-            FROM {app_config.markets_table}
-            WHERE condition_id IS NOT NULL
-              {active_filter}
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY condition_id
-                ORDER BY updated_at DESC NULLS LAST, transformed_at DESC NULLS LAST, market_id
-            ) = 1
-        )
         SELECT
             market_id,
             condition_id,
-            COALESCE(question, slug, market_id) AS question,
-            COALESCE(slug, question, market_id) AS market_label,
-            COALESCE(active, FALSE) AS active,
-            COALESCE(closed, FALSE) AS closed,
+            market_question,
+            market_label,
+            active,
+            closed,
             end_date,
-            ROUND(COALESCE(total_volume_usdc, 0), 2) AS total_volume_usdc
-        FROM markets_dedup
+            total_volume_usdc
+        FROM {app_config.highest_volume_markets_table}
+        {active_filter}
         ORDER BY total_volume_usdc DESC, market_label ASC
         LIMIT {market_limit}
     """
-    data = session.sql(query).to_pandas()
-    if data.empty:
-        return data
-    return data.rename(
-        columns={
-            "MARKET_ID": "market_id",
-            "CONDITION_ID": "condition_id",
-            "QUESTION": "question",
-            "MARKET_LABEL": "market_label",
-            "ACTIVE": "active",
-            "CLOSED": "closed",
-            "END_DATE": "end_date",
-            "TOTAL_VOLUME_USDC": "total_volume_usdc",
-        }
-    )
+    return rename_columns(session.sql(query).to_pandas())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_top_traders(
-    condition_id: str, trader_limit: int, selected_date: str | None
+def fetch_top_traders_daily(
+    condition_id: str, trader_limit: int, selected_date: str
 ) -> pd.DataFrame:
     app_config = load_app_config()
     session = get_session()
     escaped_condition_id = sql_string_literal(condition_id)
-    date_filter = ""
-    if selected_date is not None:
-        date_filter = (
-            f"AND TO_DATE(TO_TIMESTAMP_NTZ(timestamp)) = '{selected_date}'"
-        )
-
     query = f"""
-        WITH market_trades AS (
-            SELECT
-                proxyWallet AS proxy_wallet,
-                TRY_TO_DOUBLE(usdcSize) AS usdc_size
-            FROM {app_config.user_activity_table}
-            WHERE type = 'TRADE'
-              AND conditionId = '{escaped_condition_id}'
-              {date_filter}
-        )
         SELECT
             proxy_wallet,
-            ROUND(SUM(COALESCE(usdc_size, 0)), 2) AS total_volume_usdc,
-            COUNT(*) AS trade_count,
-            ROUND(AVG(COALESCE(usdc_size, 0)), 2) AS average_trade_usdc,
-            ROUND(MAX(COALESCE(usdc_size, 0)), 2) AS largest_trade_usdc
-        FROM market_trades
-        GROUP BY 1
+            total_volume_usdc,
+            trade_count,
+            average_trade_usdc,
+            largest_trade_usdc
+        FROM {app_config.market_top_traders_daily_table}
+        WHERE condition_id = '{escaped_condition_id}'
+          AND trade_date = '{selected_date}'
         ORDER BY total_volume_usdc DESC, trade_count DESC, proxy_wallet ASC
         LIMIT {trader_limit}
     """
-    data = session.sql(query).to_pandas()
-    if data.empty:
-        return data
-    return data.rename(
-        columns={
-            "PROXY_WALLET": "proxy_wallet",
-            "TOTAL_VOLUME_USDC": "total_volume_usdc",
-            "TRADE_COUNT": "trade_count",
-            "AVERAGE_TRADE_USDC": "average_trade_usdc",
-            "LARGEST_TRADE_USDC": "largest_trade_usdc",
-        }
-    )
+    return rename_columns(session.sql(query).to_pandas())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_top_traders_all_time(condition_id: str, trader_limit: int) -> pd.DataFrame:
+    app_config = load_app_config()
+    session = get_session()
+    escaped_condition_id = sql_string_literal(condition_id)
+    query = f"""
+        SELECT
+            proxy_wallet,
+            total_volume_usdc,
+            trade_count,
+            average_trade_usdc,
+            largest_trade_usdc
+        FROM {app_config.market_top_traders_all_time_table}
+        WHERE condition_id = '{escaped_condition_id}'
+        ORDER BY total_volume_usdc DESC, trade_count DESC, proxy_wallet ASC
+        LIMIT {trader_limit}
+    """
+    return rename_columns(session.sql(query).to_pandas())
 
 
 def render_summary(question_name: str, markets_df: pd.DataFrame) -> None:
@@ -272,10 +224,10 @@ def render_summary(question_name: str, markets_df: pd.DataFrame) -> None:
         )
         return
 
-    active_count = int(markets_df["active"].fillna(False).sum())
+    open_count = int((~markets_df["closed"].fillna(False)).sum())
     metric_col_1.metric("Visible listed volume", f"${total_volume:,.2f}")
     metric_col_2.metric("Visible markets", f"{len(markets_df):,}")
-    metric_col_3.metric("Visible active markets", f"{active_count:,}")
+    metric_col_3.metric("Visible open markets", f"{open_count:,}")
 
 
 def render_market_table(question_name: str, markets_df: pd.DataFrame):
@@ -371,7 +323,8 @@ def main() -> None:
     except Exception as exc:  # pragma: no cover - UI error path
         st.error(
             "The app could not initialize the Snowflake session. "
-            "Check `.streamlit/secrets.toml` and your Snowflake access."
+            "Check `.streamlit/secrets.toml`, your Snowflake access, and whether "
+            "the analytics build has been run."
         )
         st.exception(exc)
         return
@@ -382,6 +335,18 @@ def main() -> None:
             "Question to answer",
             options=[QUESTION_TRACKED_TODAY, QUESTION_HIGHEST_VOLUME],
         )
+        selected_date = today
+        active_only = False
+        if question_name == QUESTION_TRACKED_TODAY:
+            selected_date = st.date_input(
+                "Trading day",
+                value=today,
+                help=(
+                    "Defaults to the current day in the configured Snowflake session "
+                    f"timezone: {app_config.timezone}."
+                ),
+            )
+
         market_limit = st.slider(
             "Markets to show",
             min_value=5,
@@ -396,20 +361,8 @@ def main() -> None:
             value=min(app_config.default_trader_limit, 50),
             step=1,
         )
-
-        selected_date = today
-        active_only = False
-        if question_name == QUESTION_TRACKED_TODAY:
-            selected_date = st.date_input(
-                "Trading day",
-                value=today,
-                help=(
-                    "Defaults to the current day in the configured Snowflake session "
-                    f"timezone: {app_config.timezone}."
-                ),
-            )
-        else:
-            active_only = st.checkbox("Active markets only", value=True)
+        if question_name != QUESTION_TRACKED_TODAY:
+            active_only = st.checkbox("Open markets only", value=True)
 
         if st.button("Refresh data"):
             st.cache_data.clear()
@@ -417,23 +370,23 @@ def main() -> None:
 
     if question_name == QUESTION_TRACKED_TODAY:
         st.caption(
-            "Tracked-wallet trade volume by day from the user-activity table, with a "
-            "top-trader drill-down."
+            "Warehouse-driven daily tracked-volume rankings from "
+            "`ANALYTICS.TRACKED_MARKET_VOLUME_DAILY`."
         )
         selected_date_sql = selected_date.isoformat()
         markets_df = fetch_tracked_markets_for_day(selected_date_sql, market_limit)
     else:
         st.caption(
-            "Highest-volume markets from the curated markets table, ranked by listed "
-            "market volume."
+            "Warehouse-driven listed-volume rankings from "
+            "`ANALYTICS.HIGHEST_VOLUME_MARKETS`."
         )
         selected_date_sql = None
         markets_df = fetch_highest_volume_markets(market_limit, active_only)
 
     if markets_df.empty:
         st.warning(
-            "No markets were found for the selected controls. Check the table names, "
-            "your Snowflake permissions, or the selected filters."
+            "No analytics rows were found for the selected controls. Run the analytics "
+            "build script and confirm the analytics tables contain data."
         )
         return
 
@@ -442,14 +395,14 @@ def main() -> None:
     if question_name == QUESTION_TRACKED_TODAY:
         st.subheader(f"Top tracked markets on {selected_date_sql}")
         st.caption(
-            "These rankings come from the ingested user-activity table rather than "
-            "platform-wide Polymarket volume."
+            "This ranking comes from the materialized analytics table rather than a "
+            "live join inside the app."
         )
     else:
         st.subheader("Highest volume markets")
         st.caption(
-            "These rankings come from `GAMMA_MARKETS.volume_num` and can be filtered "
-            "to active markets only."
+            "This ranking comes from the materialized analytics table built from the "
+            "curated markets dataset."
         )
 
     market_selection = render_market_table(question_name, markets_df)
@@ -460,16 +413,18 @@ def main() -> None:
 
     if question_name == QUESTION_TRACKED_TODAY:
         trader_time_scope = f"on {selected_date_sql}"
+        top_traders_df = fetch_top_traders_daily(
+            selected_market["condition_id"], trader_limit, selected_date_sql
+        )
     else:
-        trader_time_scope = "across tracked history"
+        trader_time_scope = "across all tracked history"
+        top_traders_df = fetch_top_traders_all_time(
+            selected_market["condition_id"], trader_limit
+        )
 
     st.subheader("Top traders in the selected market")
     st.write(f"Selected market: **{selected_market['market_label']}**")
     st.caption(f"Top traders are ranked by total traded volume {trader_time_scope}.")
-
-    top_traders_df = fetch_top_traders(
-        selected_market["condition_id"], trader_limit, selected_date_sql
-    )
 
     trader_metric_col_1, trader_metric_col_2 = st.columns(2)
     market_volume_label = (
@@ -485,7 +440,7 @@ def main() -> None:
     )
 
     if top_traders_df.empty:
-        st.info("No trader rows were found for the selected market in the tracked data.")
+        st.info("No trader rows were found for the selected market in the analytics layer.")
         return
 
     st.dataframe(
