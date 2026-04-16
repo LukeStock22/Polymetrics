@@ -2,17 +2,95 @@
 
 This repo now includes a local Streamlit app backed by a Snowflake analytics layer, plus a developer-focused data availability page.
 
-The analytics page currently supports two questions:
+The analytics page now supports a broader set of question-driven views selected from the left sidebar.
 
-- What are the most popular markets today in the tracked user-activity data?
-- What are the highest volume markets in the curated markets table?
+## Current Data Analysis questions
 
-The app lets you choose the question from the left sidebar. It supports:
+### Market-centered views
 
-- a daily tracked-volume ranking based on `ANALYTICS.TRACKED_MARKET_VOLUME_DAILY`
-- a highest-volume market ranking based on `ANALYTICS.HIGHEST_VOLUME_MARKETS`
-- an `Open markets only` filter for the highest-volume ranking
-- a click-through trader drill-down based on `ANALYTICS.MARKET_TOP_TRADERS_DAILY` or `ANALYTICS.MARKET_TOP_TRADERS_ALL_TIME`
+- `Most Popular Markets Today`
+- `Markets With The Most Unique Traders Today`
+- `Markets With The Largest Average Bet Today`
+- `Whale-Dominated Markets Today`
+- `Highest Volume Markets`
+- `Largest Bets Placed Today`
+
+These views are backed primarily by:
+
+- `PANTHER_DB.ANALYTICS.TRACKED_MARKET_VOLUME_DAILY`
+- `PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY`
+- `PANTHER_DB.ANALYTICS.HIGHEST_VOLUME_MARKETS`
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
+- `PANTHER_DB.ANALYTICS.MARKET_CONCENTRATION_DAILY`
+
+They demonstrate:
+
+- day-level market aggregation
+- breadth vs concentration of participation
+- difference between listed volume and realized traded volume
+- click-through market drill-down into trader rankings
+
+### Trader-centered views
+
+- `Top Traders Today`
+- `Most Active Traders Today`
+- `Who Are The Biggest Traders Overall?`
+- `Largest Traders By Average Trade Size`
+- `Most Diversified Traders`
+
+These views are backed primarily by:
+
+- `PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY`
+- `PANTHER_DB.ANALYTICS.DIM_TRADERS`
+
+They demonstrate:
+
+- large-scale wallet-level aggregation
+- distinction between activity, size, and diversification
+- how a dimensional trader profile can support multiple downstream questions
+
+### Time-series and profile views
+
+- `How Much Money Was Traded Each Day?`
+- `What Separates Big Traders From Small Traders?`
+- `Trader Profile Lookup`
+- `Wallet Lifecycle / Trader Cohorts`
+
+These views are backed primarily by:
+
+- `PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY`
+- `PANTHER_DB.ANALYTICS.DIM_TRADERS`
+- `PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY`
+- `PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES`
+- `PANTHER_DB.ANALYTICS.PLATFORM_DAILY_SUMMARY`
+- `PANTHER_DB.ANALYTICS.TRADER_SEGMENT_SNAPSHOT`
+- `PANTHER_DB.ANALYTICS.TRADER_COHORT_MONTHLY`
+
+They demonstrate:
+
+- warehouse-driven time-series aggregation
+- segmentation analysis over all traders
+- granular user lookup with daily history, market footprint, and recent trades
+
+## Why this matters for the project
+
+This question-driven layout is useful for the final presentation because it shows that the project is not just storing data in Snowflake. It is using a modeled analytics layer to answer different classes of questions at different grains:
+
+- market/day
+- wallet/day
+- wallet/all-time
+- market/trader/day
+- market/trader/all-time
+- raw trade event
+
+That is a strong demonstration of both analytics modeling and scalable warehouse computation.
+
+The newer marts are especially useful when presenting the project:
+
+- `MARKET_CONCENTRATION_DAILY` shows that the warehouse can materialize richer market-structure metrics, not just simple rankings
+- `PLATFORM_DAILY_SUMMARY` shows the difference between lower-level facts and app-facing presentation marts
+- `TRADER_SEGMENT_SNAPSHOT` shows how the warehouse can turn trader history into reusable behavioral segments
+- `TRADER_COHORT_MONTHLY` shows how very large wallet histories can be compressed into lifecycle analytics
 
 Under the hood, those app-facing tables now come from a broader v2 analytics layer built from:
 
@@ -24,7 +102,7 @@ The developer page shows:
 
 - source/base table inventories across DOG, COYOTE, and PANTHER
 - analytics-layer table inventories in `PANTHER_DB.ANALYTICS`
-- row counts, last update timestamps, and storage size
+- row counts, timestamps, and storage size
 - columns and example rows for selected tables
 - summary statistics for selected analytics tables
 
@@ -77,6 +155,10 @@ Defaults:
 - `highest_volume_markets_table = "PANTHER_DB.ANALYTICS.HIGHEST_VOLUME_MARKETS"`
 - `market_top_traders_daily_table = "PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_DAILY"`
 - `market_top_traders_all_time_table = "PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_ALL_TIME"`
+- `market_concentration_daily_table = "PANTHER_DB.ANALYTICS.MARKET_CONCENTRATION_DAILY"`
+- `platform_daily_summary_table = "PANTHER_DB.ANALYTICS.PLATFORM_DAILY_SUMMARY"`
+- `trader_segment_snapshot_table = "PANTHER_DB.ANALYTICS.TRADER_SEGMENT_SNAPSHOT"`
+- `trader_cohort_monthly_table = "PANTHER_DB.ANALYTICS.TRADER_COHORT_MONTHLY"`
 
 Use fully qualified `DATABASE.SCHEMA.TABLE` names when the app reads from multiple databases. A two-part name such as `COYOTE_DB.CURATED_POLYMARKET_USER_ACTIVITY` is interpreted by Snowflake as `CURRENT_DATABASE.COYOTE_DB.CURATED_POLYMARKET_USER_ACTIVITY`, which is not what you want.
 
@@ -94,7 +176,10 @@ When Streamlit starts, use the page navigation to switch between:
 ## Notes
 
 - The app uses the Snowflake session timezone from `.streamlit/secrets.toml` to define "today".
-- The app reads from analytics tables rather than joining curated source tables live.
+- The app reads primarily from analytics tables rather than joining curated source tables live.
 - The tracked-daily question only counts `TRADE` rows from the authoritative COYOTE user-activity table.
 - The highest-volume question uses the curated market table's listed volume field during analytics-layer build time.
+- The trader profile view includes trader market footprint, so a separate `Trader Market Footprint` dropdown item is not necessary.
+- The market views already include trader drill-down, so `Top Traders In This Market Across All Time` is covered through selection rather than a separate top-level question.
+- The newer concentration, platform summary, segmentation, and cohort views are intentionally materialized in the warehouse so Streamlit can stay presentation-focused.
 - If the app returns no rows, rebuild the analytics layer and confirm the analytics tables exist.

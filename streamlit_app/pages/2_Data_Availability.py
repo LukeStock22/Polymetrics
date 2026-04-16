@@ -31,6 +31,40 @@ NUMERIC_TYPES = {
     "REAL",
 }
 TEMPORAL_TYPES = {"DATE", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ", "TIMESTAMP_TZ", "TIME"}
+ANALYTICS_ROW_TIMESTAMP_EXPRESSIONS: dict[str, str] = {
+    "DIM_MARKETS": (
+        "GREATEST("
+        "COALESCE(MARKET_UPDATED_AT, TO_TIMESTAMP_NTZ('1900-01-01 00:00:00')),"
+        "COALESCE(MARKET_TRANSFORMED_AT, TO_TIMESTAMP_NTZ('1900-01-01 00:00:00')),"
+        "COALESCE(LAST_REFRESHED_AT, TO_TIMESTAMP_NTZ('1900-01-01 00:00:00'))"
+        ")"
+    ),
+    "BRIDGE_MARKET_ASSETS": "LAST_REFRESHED_AT",
+    "FACT_DATA_API_TRADES": "COALESCE(SOURCE_LOADED_AT, TRADE_TS, LAST_REFRESHED_AT)",
+    "FACT_USER_ACTIVITY_TRADES": "COALESCE(SOURCE_LOADED_AT, TRADE_TS, LAST_REFRESHED_AT)",
+    "FACT_CLOB_TRADES": "COALESCE(ENRICHED_AT, STREAMED_AT, TRADE_TS, LAST_REFRESHED_AT)",
+    "FACT_BOOK_SNAPSHOTS": "COALESCE(STREAMED_AT, SNAPSHOT_TS, LAST_REFRESHED_AT)",
+    "FACT_LEADERBOARD_USER_SNAPSHOTS": (
+        "COALESCE(LOADED_AT, TO_TIMESTAMP_NTZ(SNAPSHOT_DATE), LAST_REFRESHED_AT)"
+    ),
+    "DIM_LEADERBOARD_USERS": (
+        "COALESCE(LOADED_AT, TO_TIMESTAMP_NTZ(SNAPSHOT_DATE), LAST_REFRESHED_AT)"
+    ),
+    "FACT_ANOMALIES": "COALESCE(DETECTED_AT, LAST_REFRESHED_AT)",
+    "FACT_ANOMALY_ATTRIBUTION": "COALESCE(ATTRIBUTED_AT, TRADE_TIMESTAMP, LAST_REFRESHED_AT)",
+    "FACT_MARKET_DAILY": "COALESCE(LAST_TRADE_TS, FIRST_TRADE_TS, LAST_REFRESHED_AT)",
+    "FACT_WALLET_DAILY": "LAST_REFRESHED_AT",
+    "DIM_TRADERS": "COALESCE(UPDATED_AT, LAST_SEEN, FIRST_SEEN)",
+    "TRACKED_MARKET_VOLUME_DAILY": "COALESCE(LAST_TRADE_TS, FIRST_TRADE_TS, LAST_REFRESHED_AT)",
+    "HIGHEST_VOLUME_MARKETS": "LAST_REFRESHED_AT",
+    "MARKET_TOP_TRADERS_DAILY": "LAST_REFRESHED_AT",
+    "MARKET_TOP_TRADERS_ALL_TIME": "LAST_REFRESHED_AT",
+    "MARKET_CONCENTRATION_DAILY": "LAST_REFRESHED_AT",
+    "PLATFORM_DAILY_SUMMARY": "LAST_REFRESHED_AT",
+    "TRADER_SEGMENT_SNAPSHOT": "LAST_REFRESHED_AT",
+    "TRADER_COHORT_MONTHLY": "LAST_REFRESHED_AT",
+    "MARKET_THEME_DAILY": "LAST_REFRESHED_AT",
+}
 
 ANALYTICS_TABLE_METADATA: dict[str, dict[str, object]] = {
     "DIM_MARKETS": {
@@ -681,6 +715,201 @@ ANALYTICS_TABLE_METADATA: dict[str, dict[str, object]] = {
             """
         ).strip(),
     },
+    "MARKET_CONCENTRATION_DAILY": {
+        "build_method": "Snowflake SQL via Snowpark session.sql",
+        "sources": [
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY",
+                "role": "Daily market totals and unique-trader counts",
+            },
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_DAILY",
+                "role": "Per-market trader rankings used to compute concentration shares",
+            },
+        ],
+        "joins": [
+            {
+                "left": "FACT_MARKET_DAILY",
+                "right": "Top-trader concentration rollup",
+                "on": "STAT_DATE = TRADE_DATE AND CONDITION_ID = CONDITION_ID",
+            }
+        ],
+        "build_logic": (
+            "Materialize top-1 and top-5 trader share-of-volume metrics for each "
+            "market/day so the app can present a real concentration view instead of a proxy."
+        ),
+        "query_sql": dedent(
+            """
+            WITH ranked AS (
+                SELECT
+                    TRADE_DATE,
+                    CONDITION_ID,
+                    PROXY_WALLET,
+                    TOTAL_VOLUME_USDC,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY TRADE_DATE, CONDITION_ID
+                        ORDER BY TOTAL_VOLUME_USDC DESC, PROXY_WALLET
+                    ) AS trader_rank
+                FROM PANTHER_DB.ANALYTICS.MARKET_TOP_TRADERS_DAILY
+            )
+            SELECT ...
+            FROM PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY m
+            LEFT JOIN concentration c
+              ON m.STAT_DATE = c.TRADE_DATE
+             AND m.CONDITION_ID = c.CONDITION_ID
+            """
+        ).strip(),
+    },
+    "PLATFORM_DAILY_SUMMARY": {
+        "build_method": "Snowflake SQL via Snowpark session.sql",
+        "sources": [
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY",
+                "role": "Day-level market totals",
+            },
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY",
+                "role": "Day-level wallet activity counts",
+            },
+        ],
+        "joins": [
+            {
+                "left": "Market-day rollup",
+                "right": "Wallet-day rollup",
+                "on": "TRADE_DATE = TRADE_DATE",
+            }
+        ],
+        "build_logic": (
+            "Precompute day-level platform summary metrics so the app reads a compact "
+            "mart instead of aggregating lower-level daily facts live."
+        ),
+        "query_sql": dedent(
+            """
+            WITH market_rollup AS (
+                SELECT
+                    STAT_DATE AS TRADE_DATE,
+                    SUM(TOTAL_USDC_VOLUME) AS TOTAL_VOLUME_USDC,
+                    SUM(TRADE_COUNT) AS TOTAL_TRADES
+                FROM PANTHER_DB.ANALYTICS.FACT_MARKET_DAILY
+                GROUP BY STAT_DATE
+            )
+            SELECT ...
+            FROM market_rollup m
+            LEFT JOIN wallet_rollup w
+              ON m.TRADE_DATE = w.TRADE_DATE
+            """
+        ).strip(),
+    },
+    "TRADER_SEGMENT_SNAPSHOT": {
+        "build_method": "Snowflake SQL via Snowpark session.sql",
+        "sources": [
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.DIM_TRADERS",
+                "role": "All-time trader profiles and behavior metrics",
+            }
+        ],
+        "joins": [],
+        "build_logic": (
+            "Assign percentile buckets across trader volume, activity, diversification, "
+            "and average trade size to produce a reusable segmentation snapshot."
+        ),
+        "query_sql": dedent(
+            """
+            SELECT
+                *,
+                NTILE(10) OVER (ORDER BY TOTAL_VOLUME DESC NULLS LAST) AS volume_decile,
+                NTILE(10) OVER (ORDER BY TOTAL_TRADES DESC NULLS LAST) AS trade_count_decile,
+                NTILE(10) OVER (ORDER BY DISTINCT_MARKETS DESC NULLS LAST) AS diversification_decile,
+                NTILE(10) OVER (ORDER BY AVG_TRADE_SIZE DESC NULLS LAST) AS avg_trade_size_decile
+            FROM PANTHER_DB.ANALYTICS.DIM_TRADERS
+            """
+        ).strip(),
+    },
+    "TRADER_COHORT_MONTHLY": {
+        "build_method": "Snowflake SQL via Snowpark session.sql",
+        "sources": [
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.FACT_WALLET_DAILY",
+                "role": "Daily wallet activity used to build wallet-month summaries",
+            },
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.DIM_TRADERS",
+                "role": "Trader first-seen timestamps used for cohort assignment",
+            },
+        ],
+        "joins": [
+            {
+                "left": "Wallet-month rollup",
+                "right": "DIM_TRADERS cohort assignment",
+                "on": "PROXY_WALLET = PROXY_WALLET",
+            }
+        ],
+        "build_logic": (
+            "Compress wallet activity into cohort-month metrics so the app can present "
+            "wallet lifecycle and cohort behavior without scanning raw trade history."
+        ),
+        "query_sql": dedent(
+            """
+            WITH cohort_base AS (
+                SELECT
+                    PROXY_WALLET,
+                    DATE_TRUNC('MONTH', FIRST_SEEN) AS cohort_month
+                FROM PANTHER_DB.ANALYTICS.DIM_TRADERS
+            )
+            SELECT ...
+            FROM wallet_monthly w
+            INNER JOIN cohort_base c
+              ON w.PROXY_WALLET = c.PROXY_WALLET
+            """
+        ).strip(),
+    },
+    "MARKET_THEME_DAILY": {
+        "build_method": "Snowflake SQL via Snowpark session.sql",
+        "sources": [
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES",
+                "role": "Authoritative COYOTE-backed trade history used to aggregate theme-level demand",
+            },
+            {
+                "table_name": "PANTHER_DB.ANALYTICS.DIM_MARKETS",
+                "role": "PANTHER market metadata used to normalize each market into a theme",
+            },
+        ],
+        "joins": [
+            {
+                "left": "FACT_USER_ACTIVITY_TRADES",
+                "right": "DIM_MARKETS",
+                "on": "CONDITION_ID = CONDITION_ID",
+            }
+        ],
+        "build_logic": (
+            "Normalize each market into a bet theme using PANTHER `GROUP_ITEM_TITLE` first, "
+            "then event title as a fallback, and aggregate daily volume, participation, "
+            "and market counts at the theme/day grain."
+        ),
+        "query_sql": dedent(
+            """
+            SELECT
+                f.TRADE_DATE,
+                COALESCE(
+                    d.MARKET_THEME,
+                    d.MARKET_GROUP_TITLE,
+                    d.EVENT_TITLE,
+                    f.MARKET_LABEL,
+                    f.MARKET_QUESTION,
+                    f.CONDITION_ID
+                ) AS MARKET_THEME,
+                COUNT(DISTINCT f.CONDITION_ID) AS DISTINCT_MARKETS,
+                COUNT(*) AS TRADE_COUNT,
+                COUNT(DISTINCT f.PROXY_WALLET) AS UNIQUE_TRADERS,
+                SUM(f.USDC_VOLUME) AS TOTAL_VOLUME_USDC
+            FROM PANTHER_DB.ANALYTICS.FACT_USER_ACTIVITY_TRADES f
+            LEFT JOIN PANTHER_DB.ANALYTICS.DIM_MARKETS d
+              ON f.CONDITION_ID = d.CONDITION_ID
+            GROUP BY 1, 2
+            """
+        ).strip(),
+    },
 }
 
 
@@ -699,6 +928,14 @@ def format_bytes_to_gb(value: float | int | None) -> float | None:
     if value is None:
         return None
     return round(float(value) / (1024**3), 4)
+
+
+def format_timestamp(value) -> str:
+    if pd.isna(value):
+        return "N/A"
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
 
 
 def build_base_table_specs() -> list[dict[str, str]]:
@@ -901,12 +1138,20 @@ def fetch_analytics_inventory_metadata() -> pd.DataFrame:
             last_altered
         FROM PANTHER_DB.information_schema.tables
         WHERE table_schema = 'ANALYTICS'
+          AND table_name <> 'ANALYTICS_BUILD_STATE'
         ORDER BY table_name
     """
     df = session.sql(query).to_pandas()
     if df.empty:
         return pd.DataFrame(
-            columns=["table_name", "row_count", "size_gb", "last_altered", "short_name"]
+            columns=[
+                "table_name",
+                "row_count",
+                "size_gb",
+                "last_altered",
+                "latest_row_timestamp",
+                "short_name",
+            ]
         )
 
     df["table_name"] = (
@@ -919,9 +1164,64 @@ def fetch_analytics_inventory_metadata() -> pd.DataFrame:
             "LAST_ALTERED": "last_altered",
         }
     )
-    return df[
+    inventory_df = df[
         ["table_name", "row_count", "size_gb", "last_altered", "TABLE_NAME"]
     ].rename(columns={"TABLE_NAME": "short_name"})
+    row_freshness_df = fetch_analytics_row_freshness(tuple(inventory_df["table_name"].tolist()))
+    return inventory_df.merge(row_freshness_df, on="table_name", how="left")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_analytics_row_freshness(
+    table_names: tuple[str, ...],
+) -> pd.DataFrame:
+    if not table_names:
+        return pd.DataFrame(columns=["table_name", "latest_row_timestamp"])
+
+    session = get_session()
+    subqueries: list[str] = []
+    for full_name in table_names:
+        _, _, short_name = parse_fq_name(full_name)
+        timestamp_expression = ANALYTICS_ROW_TIMESTAMP_EXPRESSIONS.get(short_name)
+        if not timestamp_expression:
+            subqueries.append(
+                f"SELECT '{full_name}' AS table_name, NULL::TIMESTAMP_NTZ AS latest_row_timestamp"
+            )
+            continue
+        subqueries.append(
+            f"""
+            SELECT
+                '{full_name}' AS table_name,
+                MAX({timestamp_expression}) AS latest_row_timestamp
+            FROM {full_name}
+            """.strip()
+        )
+
+    return session.sql("\nUNION ALL\n".join(subqueries)).to_pandas().rename(
+        columns={"TABLE_NAME": "table_name", "LATEST_ROW_TIMESTAMP": "latest_row_timestamp"}
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_analytics_build_state() -> pd.DataFrame:
+    session = get_session()
+    query = """
+        SELECT
+            pipeline_name,
+            last_successful_coyote_loaded_at,
+            last_build_mode,
+            updated_at
+        FROM PANTHER_DB.ANALYTICS.ANALYTICS_BUILD_STATE
+        WHERE pipeline_name = 'analytics_layer_v2'
+    """
+    return session.sql(query).to_pandas().rename(
+        columns={
+            "PIPELINE_NAME": "pipeline_name",
+            "LAST_SUCCESSFUL_COYOTE_LOADED_AT": "last_successful_coyote_loaded_at",
+            "LAST_BUILD_MODE": "last_build_mode",
+            "UPDATED_AT": "updated_at",
+        }
+    )
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1067,8 +1367,10 @@ def render_table_details(selected: pd.Series, include_summary_stats: bool) -> No
         f"{float(selected['size_gb']):,.4f}" if pd.notna(selected["size_gb"]) else "N/A",
     )
     metric_col_3.metric(
-        "Last updated",
-        str(selected["last_altered"]) if pd.notna(selected["last_altered"]) else "N/A",
+        "Latest row timestamp" if include_summary_stats else "Last updated",
+        format_timestamp(
+            selected["latest_row_timestamp"] if include_summary_stats else selected["last_altered"]
+        ),
     )
 
     columns_df = fetch_table_columns(full_name)
@@ -1138,7 +1440,8 @@ def main() -> None:
             st.rerun()
     with summary_col:
         st.caption(
-            "Table row counts, sizes, and last-updated timestamps come from Snowflake metadata."
+            "Base-table timestamps come from Snowflake table metadata. "
+            "Analytics-table freshness uses per-table row timestamps plus the analytics build state."
         )
 
     base_specs = build_base_table_specs()
@@ -1148,6 +1451,7 @@ def main() -> None:
     )
     base_tables_df = fetch_table_inventory_metadata(base_specs_tuple)
     analytics_tables_df = fetch_analytics_inventory_metadata()
+    analytics_build_state_df = fetch_analytics_build_state()
 
     base_tab, analytics_tab = st.tabs(["Base Tables", "Analytics Layer"])
 
@@ -1192,8 +1496,16 @@ def main() -> None:
         st.write(
             "These are the tables materialized in `PANTHER_DB.ANALYTICS` by the Snowpark analytics build."
         )
+        if not analytics_build_state_df.empty:
+            build_state = analytics_build_state_df.iloc[0]
+            st.caption(
+                "Last successful analytics build run: "
+                f"`{format_timestamp(build_state['updated_at'])}` "
+                f"(mode: `{build_state['last_build_mode']}`, "
+                f"COYOTE watermark: `{format_timestamp(build_state['last_successful_coyote_loaded_at'])}`)"
+            )
         if not analytics_tables_df.empty:
-            metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
+            metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
             metric_col_1.metric("Analytics tables", f"{len(analytics_tables_df):,}")
             metric_col_2.metric(
                 "Total rows (metadata)",
@@ -1203,10 +1515,14 @@ def main() -> None:
                 "Total size (GB)",
                 f"{float(analytics_tables_df['size_gb'].fillna(0).sum()):,.4f}",
             )
+            metric_col_4.metric(
+                "Most recent row timestamp",
+                format_timestamp(analytics_tables_df["latest_row_timestamp"].max()),
+            )
 
         analytics_selection = st.dataframe(
             analytics_tables_df[
-                ["short_name", "table_name", "row_count", "last_altered", "size_gb"]
+                ["short_name", "table_name", "row_count", "latest_row_timestamp", "size_gb"]
             ],
             hide_index=True,
             on_select="rerun",
@@ -1216,7 +1532,9 @@ def main() -> None:
                 "short_name": st.column_config.TextColumn("Analytics table"),
                 "table_name": st.column_config.TextColumn("Full name"),
                 "row_count": st.column_config.NumberColumn("Rows", format="%d"),
-                "last_altered": st.column_config.DatetimeColumn("Last updated"),
+                "latest_row_timestamp": st.column_config.DatetimeColumn(
+                    "Latest row timestamp"
+                ),
                 "size_gb": st.column_config.NumberColumn("Size (GB)", format="%.4f"),
             },
             key="analytics_table_inventory",
