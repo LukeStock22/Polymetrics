@@ -21,6 +21,7 @@ from snowflake.snowpark.functions import (
     sum as sum_,
     to_date,
     to_timestamp_ntz,
+    upper,
     when,
 )
 from snowflake.snowpark.window import Window
@@ -241,6 +242,54 @@ def build_data_api_trades_df(session: Session, config: AnalyticsConfig, dim_mark
         trades["EVENT_SLUG"].alias("EVENT_SLUG"),
         trades["LOADED_AT"].alias("SOURCE_LOADED_AT"),
         lit("DOG_DATA_API").alias("SOURCE_SYSTEM"),
+    )
+
+
+def build_user_activity_trades_df(session: Session, config: AnalyticsConfig, dim_markets):
+    activity = session.table(config.user_activity_table)
+    trade_activity = activity.filter(upper(col("TYPE")) == lit("TRADE"))
+    enriched_trades = trade_activity.join(
+        dim_markets,
+        trade_activity["CONDITIONID"] == dim_markets["CONDITION_ID"],
+        how="left",
+    )
+
+    return enriched_trades.select(
+        to_date(to_timestamp_ntz(trade_activity["TIMESTAMP"])).alias("TRADE_DATE"),
+        to_timestamp_ntz(trade_activity["TIMESTAMP"]).alias("TRADE_TS"),
+        coalesce(dim_markets["MARKET_ID"], lit(None)).alias("MARKET_ID"),
+        trade_activity["CONDITIONID"].alias("CONDITION_ID"),
+        coalesce(
+            dim_markets["MARKET_QUESTION"],
+            dim_markets["QUESTION_TEXT"],
+            trade_activity["CONDITIONID"],
+        ).alias("MARKET_QUESTION"),
+        coalesce(
+            dim_markets["MARKET_LABEL"],
+            dim_markets["MARKET_SLUG"],
+            trade_activity["CONDITIONID"],
+        ).alias("MARKET_LABEL"),
+        coalesce(dim_markets["ACTIVE"], lit(False)).alias("ACTIVE"),
+        coalesce(dim_markets["CLOSED"], lit(False)).alias("CLOSED"),
+        trade_activity["PROXYWALLET"].alias("PROXY_WALLET"),
+        trade_activity["ASSET"].alias("ASSET_ID"),
+        upper(trade_activity["SIDE"]).alias("TRADE_SIDE"),
+        trade_activity["OUTCOME"].alias("OUTCOME_NAME"),
+        trade_activity["OUTCOMEINDEX"].cast("INTEGER").alias("OUTCOME_INDEX"),
+        trade_activity["PRICE"].cast("DOUBLE").alias("PRICE"),
+        trade_activity["SIZE"].cast("DOUBLE").alias("SIZE"),
+        coalesce(
+            trade_activity["USDCSIZE"].cast("DOUBLE"),
+            round_(
+                trade_activity["PRICE"].cast("DOUBLE")
+                * trade_activity["SIZE"].cast("DOUBLE"),
+                2,
+            ),
+        ).alias("USDC_VOLUME"),
+        trade_activity["TRANSACTIONHASH"].alias("TRANSACTION_HASH"),
+        trade_activity["TYPE"].alias("ACTIVITY_TYPE"),
+        trade_activity["_LOADED_AT"].alias("SOURCE_LOADED_AT"),
+        lit("COYOTE_USER_ACTIVITY").alias("SOURCE_SYSTEM"),
     )
 
 
@@ -680,6 +729,9 @@ def main() -> None:
 
         dim_markets_name = table_name(analytics_schema, "DIM_MARKETS")
         bridge_market_assets_name = table_name(analytics_schema, "BRIDGE_MARKET_ASSETS")
+        fact_user_activity_trades_name = table_name(
+            analytics_schema, "FACT_USER_ACTIVITY_TRADES"
+        )
         fact_data_api_trades_name = table_name(analytics_schema, "FACT_DATA_API_TRADES")
         fact_clob_trades_name = table_name(analytics_schema, "FACT_CLOB_TRADES")
         fact_book_snapshots_name = table_name(
@@ -703,6 +755,11 @@ def main() -> None:
             "LAST_REFRESHED_AT", current_timestamp()
         )
         write_table(dim_markets, dim_markets_name)
+
+        fact_user_activity_trades = build_user_activity_trades_df(
+            session, config, session.table(dim_markets_name)
+        ).with_column("LAST_REFRESHED_AT", current_timestamp())
+        write_table(fact_user_activity_trades, fact_user_activity_trades_name)
 
         market_assets = build_market_assets_df(session, config, analytics_schema).with_column(
             "LAST_REFRESHED_AT", current_timestamp()
@@ -748,21 +805,21 @@ def main() -> None:
         write_table(fact_anomaly_attribution, fact_anomaly_attribution_name)
 
         fact_market_daily = build_market_daily_df(
-            session.table(fact_data_api_trades_name),
+            session.table(fact_user_activity_trades_name),
             session.table(fact_anomalies_name),
             dim_markets_ref,
         )
         write_table(fact_market_daily, fact_market_daily_name)
 
         fact_wallet_daily = build_wallet_daily_df(
-            session.table(fact_data_api_trades_name),
+            session.table(fact_user_activity_trades_name),
             session.table(fact_anomaly_attribution_name),
         )
         write_table(fact_wallet_daily, fact_wallet_daily_name)
 
         source_risk_profiles = session.table(config.dog_trader_risk_profiles_table)
         dim_traders = build_trader_profiles_df(
-            session.table(fact_data_api_trades_name),
+            session.table(fact_user_activity_trades_name),
             session.table(dim_leaderboard_users_name),
             session.table(fact_anomaly_attribution_name),
             source_risk_profiles,
@@ -786,7 +843,7 @@ def main() -> None:
         )
 
         top_traders_daily = (
-            session.table(fact_data_api_trades_name)
+            session.table(fact_user_activity_trades_name)
             .group_by(
                 "TRADE_DATE",
                 "MARKET_ID",
@@ -805,7 +862,7 @@ def main() -> None:
         )
 
         top_traders_all_time = (
-            session.table(fact_data_api_trades_name)
+            session.table(fact_user_activity_trades_name)
             .group_by(
                 "MARKET_ID",
                 "CONDITION_ID",
@@ -844,6 +901,7 @@ def main() -> None:
         print(
             "Built analytics layer v2:\n"
             f"  - {dim_markets_name}\n"
+            f"  - {fact_user_activity_trades_name}\n"
             f"  - {bridge_market_assets_name}\n"
             f"  - {fact_data_api_trades_name}\n"
             f"  - {fact_clob_trades_name}\n"

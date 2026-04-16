@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 import re
 
 import pandas as pd
@@ -99,7 +100,7 @@ def load_app_config() -> AppConfig:
 
 
 @st.cache_resource
-def get_session() -> Session:
+def create_session() -> Session:
     connection_parameters = dict(st.secrets["snowflake"])
     app_config = load_app_config()
     session = Session.builder.configs(connection_parameters).create()
@@ -107,6 +108,22 @@ def get_session() -> Session:
         f"ALTER SESSION SET TIMEZONE = '{sql_string_literal(app_config.timezone)}'"
     ).collect()
     return session
+
+
+def get_session() -> Session:
+    session = create_session()
+    try:
+        session.sql("SELECT 1").collect()
+        return session
+    except Exception:
+        try:
+            session.close()
+        except Exception:
+            pass
+        create_session.clear()
+        session = create_session()
+        session.sql("SELECT 1").collect()
+        return session
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -244,7 +261,7 @@ def render_market_table(question_name: str, markets_df: pd.DataFrame):
                 ]
             ],
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             selection_mode="single-row",
             column_config={
@@ -273,7 +290,7 @@ def render_market_table(question_name: str, markets_df: pd.DataFrame):
             ]
         ],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
         selection_mode="single-row",
         column_config={
@@ -313,8 +330,7 @@ def get_selected_market(
     return selected_market
 
 
-def main() -> None:
-    st.set_page_config(page_title="Polymetrics", layout="wide")
+def render_data_analysis_page() -> None:
     st.title("Polymetrics")
 
     try:
@@ -446,7 +462,7 @@ def main() -> None:
     st.dataframe(
         top_traders_df,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "proxy_wallet": st.column_config.TextColumn("Proxy wallet"),
             "total_volume_usdc": st.column_config.NumberColumn(
@@ -464,6 +480,20 @@ def main() -> None:
 
     trader_chart_df = top_traders_df.set_index("proxy_wallet")[["total_volume_usdc"]]
     st.bar_chart(trader_chart_df, horizontal=True)
+
+
+def main() -> None:
+    st.set_page_config(page_title="Polymetrics", layout="wide")
+    navigation = st.navigation(
+        [
+            st.Page(render_data_analysis_page, title="Data Analysis", default=True),
+            st.Page(
+                Path(__file__).parent / "pages" / "2_Data_Availability.py",
+                title="Data Availability",
+            ),
+        ]
+    )
+    navigation.run()
 
 
 if __name__ == "__main__":

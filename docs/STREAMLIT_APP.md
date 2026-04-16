@@ -1,6 +1,8 @@
 # Streamlit App
 
-This repo now includes a local Streamlit app backed by a Snowflake analytics layer, with two questions:
+This repo now includes a local Streamlit app backed by a Snowflake analytics layer, plus a developer-focused data availability page.
+
+The analytics page currently supports two questions:
 
 - What are the most popular markets today in the tracked user-activity data?
 - What are the highest volume markets in the curated markets table?
@@ -9,10 +11,22 @@ The app lets you choose the question from the left sidebar. It supports:
 
 - a daily tracked-volume ranking based on `ANALYTICS.TRACKED_MARKET_VOLUME_DAILY`
 - a highest-volume market ranking based on `ANALYTICS.HIGHEST_VOLUME_MARKETS`
-- an `Active markets only` filter for the highest-volume ranking
+- an `Open markets only` filter for the highest-volume ranking
 - a click-through trader drill-down based on `ANALYTICS.MARKET_TOP_TRADERS_DAILY` or `ANALYTICS.MARKET_TOP_TRADERS_ALL_TIME`
 
-Under the hood, those app-facing tables now come from a broader v2 analytics layer built from `DOG_DB` trade/orderbook data plus `PANTHER_DB.CURATED.GAMMA_MARKETS`.
+Under the hood, those app-facing tables now come from a broader v2 analytics layer built from:
+
+- `PANTHER_DB.CURATED.GAMMA_MARKETS` as the market source of truth
+- `COYOTE_DB.PUBLIC.CURATED_POLYMARKET_USER_ACTIVITY` as the user-transaction source of truth
+- `DOG_DB` tables as supplemental raw feeds and teammate-provided enrichments
+
+The developer page shows:
+
+- source/base table inventories across DOG, COYOTE, and PANTHER
+- analytics-layer table inventories in `PANTHER_DB.ANALYTICS`
+- row counts, last update timestamps, and storage size
+- columns and example rows for selected tables
+- summary statistics for selected analytics tables
 
 ## Files
 
@@ -72,10 +86,15 @@ Use fully qualified `DATABASE.SCHEMA.TABLE` names when the app reads from multip
 streamlit run streamlit_app/app.py
 ```
 
+When Streamlit starts, use the page navigation to switch between:
+
+- the analytics home page
+- `Data Availability`
+
 ## Notes
 
 - The app uses the Snowflake session timezone from `.streamlit/secrets.toml` to define "today".
 - The app reads from analytics tables rather than joining curated source tables live.
-- The tracked-daily question only counts `TRADE` rows from the user-activity table.
+- The tracked-daily question only counts `TRADE` rows from the authoritative COYOTE user-activity table.
 - The highest-volume question uses the curated market table's listed volume field during analytics-layer build time.
 - If the app returns no rows, rebuild the analytics layer and confirm the analytics tables exist.
