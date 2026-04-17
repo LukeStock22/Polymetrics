@@ -11,5 +11,8 @@ simple_auth_manager_passwords.json.generated
 # Generated local data
 data/raw/
 
+# Virtual environment
+.venv/
+
 # Common local/editor clutter
 .DS_Store
