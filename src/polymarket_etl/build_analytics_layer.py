@@ -903,14 +903,14 @@ def build_book_snapshots_df(
 def build_leaderboard_snapshots_df(session: Session, config: AnalyticsConfig):
     leaderboard = session.table(config.dog_leaderboard_users_table)
     return leaderboard.select(
-        col("PROXY_WALLET").alias("PROXY_WALLET"),
+        col("PROXYWALLET").alias("PROXY_WALLET"),
         col("RANK").cast("INTEGER").alias("LEADERBOARD_RANK"),
-        col("USER_NAME").alias("USER_NAME"),
-        col("X_USERNAME").alias("X_USERNAME"),
-        col("VERIFIED_BADGE").alias("VERIFIED_BADGE"),
+        col("USERNAME").alias("USER_NAME"),
+        col("XUSERNAME").alias("X_USERNAME"),
+        col("VERIFIEDBADGE").alias("VERIFIED_BADGE"),
         col("VOLUME").cast("DOUBLE").alias("LEADERBOARD_VOLUME"),
         col("PNL").cast("DOUBLE").alias("LEADERBOARD_PNL"),
-        col("PROFILE_IMAGE").alias("PROFILE_IMAGE"),
+        col("PROFILEIMAGE").alias("PROFILE_IMAGE"),
         col("SNAPSHOT_DATE").alias("SNAPSHOT_DATE"),
         col("LOADED_AT").alias("LOADED_AT"),
     )

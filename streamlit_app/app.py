@@ -14,6 +14,7 @@ from snowflake.snowpark import Session
 IDENTIFIER_PATTERN = re.compile(r'^[A-Za-z0-9_."$]+$')
 TIMEZONE_PATTERN = re.compile(r"^[A-Za-z0-9_/\-+]+$")
 
+QUESTION_TRADE_HISTORY = "Market Trade History (Order Book)"
 QUESTION_TRACKED_TODAY = "Most Popular Markets Today"
 QUESTION_MARKETS_UNIQUE = "Markets With The Most Unique Traders Today"
 QUESTION_MARKETS_AVG_BET = "Markets With The Largest Average Bet Today"
@@ -46,6 +47,7 @@ QUESTIONS_WITH_DATE = DAILY_MARKET_QUESTIONS | {
     QUESTION_THEME_UNIQUE,
 }
 QUESTIONS_WITH_MARKET_LIMIT = {
+    QUESTION_TRADE_HISTORY,
     QUESTION_TRACKED_TODAY,
     QUESTION_MARKETS_UNIQUE,
     QUESTION_MARKETS_AVG_BET,
@@ -56,6 +58,7 @@ QUESTIONS_WITH_MARKET_LIMIT = {
     QUESTION_TRADER_PROFILE,
     QUESTION_THEME_VOLUME,
     QUESTION_THEME_UNIQUE,
+
 }
 QUESTIONS_WITH_TRADER_LIMIT = {
     QUESTION_TRACKED_TODAY,
@@ -82,6 +85,7 @@ QUESTIONS_WITH_HISTORY_DAYS = {
     QUESTION_TRADER_COHORTS,
 }
 QUESTIONS_WITH_RECENT_TRADES = {
+    QUESTION_TRADE_HISTORY,
     QUESTION_TOP_TRADERS_TODAY,
     QUESTION_MOST_ACTIVE_TRADERS,
     QUESTION_BIGGEST_TRADERS,
@@ -282,6 +286,51 @@ def get_session() -> Session:
         session = create_session()
         session.sql("SELECT 1").collect()
         return session
+    
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
+    app_config = load_app_config()
+    escaped_condition_id = sql_string_literal(condition_id)
+    query = f"""
+        SELECT
+            t.trade_ts,
+            COALESCE(d.user_name, t.proxy_wallet) AS trader_identity,
+            t.trade_side,
+            t.outcome_name,
+            t.price,
+            t.size,
+            t.usdc_volume,
+            t.transaction_hash
+        FROM {app_config.fact_user_activity_trades_table} t
+        LEFT JOIN {app_config.dim_traders_table} d
+          ON t.proxy_wallet = d.proxy_wallet
+        WHERE t.condition_id = '{escaped_condition_id}'
+        ORDER BY t.trade_ts DESC
+        LIMIT {trade_limit}
+    """
+    return run_query_to_pandas(query)@st.cache_data(ttl=300, show_spinner=False)
+
+def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
+    app_config = load_app_config()
+    escaped_condition_id = sql_string_literal(condition_id)
+    query = f"""
+        SELECT
+            t.trade_ts,
+            COALESCE(d.user_name, t.proxy_wallet) AS trader_identity,
+            t.trade_side,
+            t.outcome_name,
+            t.price,
+            t.size,
+            t.usdc_volume,
+            t.transaction_hash
+        FROM {app_config.fact_user_activity_trades_table} t
+        LEFT JOIN {app_config.dim_traders_table} d
+          ON t.proxy_wallet = d.proxy_wallet
+        WHERE t.condition_id = '{escaped_condition_id}'
+        ORDER BY t.trade_ts DESC
+        LIMIT {trade_limit}
+    """
+    return run_query_to_pandas(query)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -2321,6 +2370,68 @@ def render_trader_profile_lookup(
         recent_trade_limit=recent_trade_limit,
     )
 
+def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
+    st.subheader(QUESTION_TRADE_HISTORY)
+
+    markets_df = fetch_highest_volume_markets(market_limit, open_only=False)
+
+    if markets_df.empty:
+        st.warning("No markets found to display.")
+        return
+
+    table = st.dataframe(
+        markets_df[["market_label", "total_volume_usdc", "active", "closed"]],
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "market_label": st.column_config.TextColumn("Market"),
+            "total_volume_usdc": st.column_config.NumberColumn("Listed volume (USDC)", format="$%.2f"),
+        },
+        key="trade_history_market_selection",
+    )
+
+    selected_market = selected_row_or_default(
+        markets_df, table, "condition_id", "trade_history_market_selection::selected"
+    )
+
+    if selected_market is None:
+        return
+
+    st.divider()
+    st.subheader(f"Recent Trades: {selected_market['market_label']}")
+
+    trades_df = fetch_trade_history(selected_market["condition_id"], trade_limit)
+
+    if trades_df.empty:
+        st.info("No trades found for this market in the activity table.")
+        return
+
+    
+    def color_side(val):
+        if pd.isna(val):
+            return ''
+        color = 'rgba(39, 201, 115, 0.2)' if str(val).upper() == 'BUY' else 'rgba(255, 104, 113, 0.2)'
+        return f'background-color: {color}'
+
+    styled_df = trades_df.style.map(color_side, subset=['trade_side'])
+
+    st.dataframe(
+        styled_df,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "trade_ts": st.column_config.DatetimeColumn("Time"),
+            "trader_identity": st.column_config.TextColumn("Trader"),
+            "trade_side": st.column_config.TextColumn("Side"),
+            "outcome_name": st.column_config.TextColumn("Outcome"),
+            "price": st.column_config.NumberColumn("Price", format="%.4f"),
+            "size": st.column_config.NumberColumn("Shares", format="%.2f"),
+            "usdc_volume": st.column_config.NumberColumn("Total Value", format="$%.2f"),
+            "transaction_hash": st.column_config.TextColumn("Tx Hash"),
+        }
+    )
 
 def render_data_analysis_page() -> None:
     st.title("Polymetrics")
@@ -2343,6 +2454,7 @@ def render_data_analysis_page() -> None:
             "Question to answer",
             options=[
                 QUESTION_TRACKED_TODAY,
+                QUESTION_TRADE_HISTORY,
                 QUESTION_MARKETS_UNIQUE,
                 QUESTION_MARKETS_AVG_BET,
                 QUESTION_WHALE_DOMINATED,
@@ -2467,6 +2579,8 @@ def render_data_analysis_page() -> None:
         render_trader_profile_lookup(market_limit, history_days, recent_trade_limit)
     elif question_name == QUESTION_TRADER_COHORTS:
         render_trader_cohort_question(history_days)
+    elif question_name == QUESTION_TRADE_HISTORY:
+        render_trade_history_question(market_limit, recent_trade_limit)
 
 
 def main() -> None:
