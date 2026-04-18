@@ -10,28 +10,38 @@ This document describes the warehouse-driven analytics layer in `PANTHER_DB.ANAL
 
 ## Current status
 
-The analytics layer is **not scheduled yet**.
+The analytics layer now has two refresh paths:
 
-Right now it is refreshed manually by running:
+1. manual build
+2. scheduled Airflow build via `analytics_layer_refresh`
+
+Manual build:
 
 ```bash
-python src/polymarket_etl/build_analytics_layer.py --config-path .streamlit/secrets.toml
+python src/polymarket_etl/build_analytics_layer.py --config-path .streamlit/secrets.toml --mode incremental
 ```
 
-That script:
+Scheduled build:
+
+- DAG id: `analytics_layer_refresh`
+- schedule: `25 * * * *`
+- default mode: `incremental`
+
+The build script:
 
 1. connects to Snowflake through Snowpark
 2. reads source and curated tables
 3. builds analytics tables in `PANTHER_DB.ANALYTICS`
-4. overwrites those analytics tables with the latest build
+4. incrementally refreshes or fully rebuilds those analytics tables
+5. records build watermark state in `ANALYTICS.ANALYTICS_BUILD_STATE`
 
 There is currently:
 
-- no Airflow DAG for the analytics build
-- no Snowflake task/stream driving it
-- no incremental refresh logic yet
+- an Airflow DAG for the analytics build
+- incremental refresh logic driven by `COYOTE._LOADED_AT`
+- no Snowflake-native task/stream orchestration yet
 
-So the analytics layer is materialized and warehouse-driven, but refresh orchestration is still manual.
+So the analytics layer is materialized and warehouse-driven, and it now has an Airflow scheduling path. The remaining orchestration gap is Snowflake-native scheduling if you eventually want to remove Airflow from the analytics refresh step.
 
 ## Why this layer exists
 
