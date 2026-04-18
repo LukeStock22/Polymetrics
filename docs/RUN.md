@@ -79,12 +79,51 @@ You should see:
 - `gamma_markets_to_snowflake`
 - `gamma_markets_daily`
 - `gamma_markets_catchup`
+- `analytics_layer_refresh`
 
 ## 5) Trigger a DAG manually (optional)
 
 ```bash
 airflow dags trigger gamma_markets_catchup
 ```
+
+To trigger the analytics refresh manually:
+
+```bash
+airflow dags trigger analytics_layer_refresh
+```
+
+## 5.1) Run the analytics build once in the same Airflow shell
+
+If you want to test the analytics build directly before relying on the DAG, run the same Snowpark build script that `analytics_layer_refresh` calls:
+
+```bash
+python src/polymarket_etl/build_analytics_layer.py \
+  --config-path "$POLYMARKET_ANALYTICS_CONFIG_PATH" \
+  --mode "$POLYMARKET_ANALYTICS_BUILD_MODE"
+```
+
+This should be run only after:
+
+- `source airflow_home.env.example`
+- the `Snowflake` Airflow connection exists
+- `.streamlit/secrets.toml` exists at `POLYMARKET_ANALYTICS_CONFIG_PATH` and is valid in the Linux Airflow environment
+
+To force a one-time full rebuild instead of the default incremental mode:
+
+```bash
+python src/polymarket_etl/build_analytics_layer.py \
+  --config-path "$POLYMARKET_ANALYTICS_CONFIG_PATH" \
+  --mode full
+```
+
+This CLI path is useful for validating that:
+
+- the Airflow shell can import the project code
+- Snowpark can authenticate to Snowflake from the Linux environment
+- the analytics layer can be rebuilt before connecting upstream DAG completion to the analytics DAG
+
+If this direct CLI run works, the Airflow DAG is using the same build script and the same environment variables, so the next step is orchestration rather than ETL debugging.
 
 Then check run state:
 
@@ -101,10 +140,12 @@ airflow tasks states-for-dag-run gamma_markets_catchup "$RUN_ID"
 
 The catch-up DAG runs a single reconciliation window from the current watermark to yesterday midnight. Closed markets are filtered by `end_date_min`/`end_date_max`, so it avoids scanning the full closed history every run.
 The daily DAG uses the Airflow data interval but will also respect the latest `updated_at` watermark (it extends the window up to “now” and starts from the most recent curated update).
+The analytics DAG runs the Snowpark build script in `incremental` mode by default and verifies that the core analytics tables plus `ANALYTICS_BUILD_STATE` are present afterward.
 Concretely:
 
 - `start` = `MAX(updated_at)` from `CURATED.GAMMA_MARKETS`
 - `end` = max(`data_interval_end`, `now`) at runtime
+- analytics refresh time = `25` minutes past each hour by default
 
 ## 6) Start the Airflow services (for scheduled runs)
 

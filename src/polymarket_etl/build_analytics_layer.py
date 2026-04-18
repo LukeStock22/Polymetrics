@@ -390,6 +390,21 @@ def normalize_dataframe_columns(df):
     )
 
 
+def resolve_source_column(df, *candidates: str, required: bool = True):
+    available_columns = {normalize_column_name(column_name) for column_name in df.columns}
+    for candidate in candidates:
+        if candidate in available_columns:
+            return df[candidate]
+
+    if required:
+        raise ValueError(
+            "None of the expected source columns were found. "
+            f"Expected one of: {', '.join(candidates)}. "
+            f"Available columns: {', '.join(sorted(available_columns))}"
+        )
+    return lit(None)
+
+
 def assert_required_columns_exist(
     available_columns: list[str], required_columns: list[str], object_label: str
 ) -> None:
@@ -901,18 +916,36 @@ def build_book_snapshots_df(
 
 
 def build_leaderboard_snapshots_df(session: Session, config: AnalyticsConfig):
-    leaderboard = session.table(config.dog_leaderboard_users_table)
+    leaderboard = normalize_dataframe_columns(
+        session.table(config.dog_leaderboard_users_table)
+    )
     return leaderboard.select(
-        col("PROXYWALLET").alias("PROXY_WALLET"),
-        col("RANK").cast("INTEGER").alias("LEADERBOARD_RANK"),
-        col("USERNAME").alias("USER_NAME"),
-        col("XUSERNAME").alias("X_USERNAME"),
-        col("VERIFIEDBADGE").alias("VERIFIED_BADGE"),
-        col("VOLUME").cast("DOUBLE").alias("LEADERBOARD_VOLUME"),
-        col("PNL").cast("DOUBLE").alias("LEADERBOARD_PNL"),
-        col("PROFILEIMAGE").alias("PROFILE_IMAGE"),
-        col("SNAPSHOT_DATE").alias("SNAPSHOT_DATE"),
-        col("LOADED_AT").alias("LOADED_AT"),
+        resolve_source_column(leaderboard, "PROXY_WALLET", "PROXYWALLET").alias(
+            "PROXY_WALLET"
+        ),
+        resolve_source_column(leaderboard, "RANK", required=False)
+        .cast("INTEGER")
+        .alias("LEADERBOARD_RANK"),
+        resolve_source_column(leaderboard, "USER_NAME", "USERNAME", required=False).alias(
+            "USER_NAME"
+        ),
+        resolve_source_column(
+            leaderboard, "X_USERNAME", "XUSERNAME", required=False
+        ).alias("X_USERNAME"),
+        resolve_source_column(
+            leaderboard, "VERIFIED_BADGE", "VERIFIEDBADGE", required=False
+        ).alias("VERIFIED_BADGE"),
+        resolve_source_column(leaderboard, "VOLUME", required=False)
+        .cast("DOUBLE")
+        .alias("LEADERBOARD_VOLUME"),
+        resolve_source_column(leaderboard, "PNL", required=False)
+        .cast("DOUBLE")
+        .alias("LEADERBOARD_PNL"),
+        resolve_source_column(
+            leaderboard, "PROFILE_IMAGE", "PROFILEIMAGE", required=False
+        ).alias("PROFILE_IMAGE"),
+        resolve_source_column(leaderboard, "SNAPSHOT_DATE").alias("SNAPSHOT_DATE"),
+        resolve_source_column(leaderboard, "LOADED_AT").alias("LOADED_AT"),
     )
 
 

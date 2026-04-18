@@ -32,6 +32,8 @@ QUESTION_TRADER_PROFILE = "Trader Profile Lookup"
 QUESTION_TRADER_COHORTS = "Wallet Lifecycle / Trader Cohorts"
 QUESTION_THEME_VOLUME = "Top Bet Themes Today"
 QUESTION_THEME_UNIQUE = "Bet Themes With Most Unique Traders Today"
+QUESTION_THEME_AVG_BET = "Bet Themes With Largest Average Bet Today"
+QUESTION_THEME_ACTIVITY = "Most Active Bet Themes Today"
 
 DAILY_MARKET_QUESTIONS = {
     QUESTION_TRACKED_TODAY,
@@ -45,6 +47,8 @@ QUESTIONS_WITH_DATE = DAILY_MARKET_QUESTIONS | {
     QUESTION_MOST_ACTIVE_TRADERS,
     QUESTION_THEME_VOLUME,
     QUESTION_THEME_UNIQUE,
+    QUESTION_THEME_AVG_BET,
+    QUESTION_THEME_ACTIVITY,
 }
 QUESTIONS_WITH_MARKET_LIMIT = {
     QUESTION_TRADE_HISTORY,
@@ -58,7 +62,8 @@ QUESTIONS_WITH_MARKET_LIMIT = {
     QUESTION_TRADER_PROFILE,
     QUESTION_THEME_VOLUME,
     QUESTION_THEME_UNIQUE,
-
+    QUESTION_THEME_AVG_BET,
+    QUESTION_THEME_ACTIVITY,
 }
 QUESTIONS_WITH_TRADER_LIMIT = {
     QUESTION_TRACKED_TODAY,
@@ -743,6 +748,8 @@ def fetch_theme_daily_rankings(
     order_by = {
         "total_volume_usdc": "total_volume_usdc DESC, unique_traders DESC, market_theme ASC",
         "unique_traders": "unique_traders DESC, total_volume_usdc DESC, market_theme ASC",
+        "avg_trade_size": "avg_trade_size DESC, total_volume_usdc DESC, market_theme ASC",
+        "trade_count": "trade_count DESC, total_volume_usdc DESC, market_theme ASC",
     }[ranking_mode]
     query = f"""
         SELECT
@@ -2085,30 +2092,45 @@ def render_theme_daily_question(
     selected_date_sql: str,
     theme_limit: int,
 ) -> None:
-    ranking_mode = (
-        "total_volume_usdc"
-        if question_name == QUESTION_THEME_VOLUME
-        else "unique_traders"
-    )
+    ranking_mode = {
+        QUESTION_THEME_VOLUME: "total_volume_usdc",
+        QUESTION_THEME_UNIQUE: "unique_traders",
+        QUESTION_THEME_AVG_BET: "avg_trade_size",
+        QUESTION_THEME_ACTIVITY: "trade_count",
+    }[question_name]
     themes_df = fetch_theme_daily_rankings(selected_date_sql, theme_limit, ranking_mode)
 
     st.caption(
         "Market-theme analytics built from PANTHER market metadata and COYOTE trade activity."
     )
-    if question_name == QUESTION_THEME_VOLUME:
-        st.subheader(f"Top bet themes on {selected_date_sql}")
-        st.caption(
-            "Themes are normalized from PANTHER `group_item_title` first, then event title as a fallback, and ranked by traded USDC volume."
-        )
-        metric_label = "Total volume (USDC)"
-        metric_format = "$%.2f"
-    else:
-        st.subheader(f"Bet themes with the most unique traders on {selected_date_sql}")
-        st.caption(
-            "This highlights which kinds of bets attracted the broadest participation rather than just the largest dollar flow."
-        )
-        metric_label = "Unique traders"
-        metric_format = "%d"
+    header, metric_label, metric_format, caption = {
+        QUESTION_THEME_VOLUME: (
+            f"Top bet themes on {selected_date_sql}",
+            "Total volume (USDC)",
+            "$%.2f",
+            "Themes are normalized from PANTHER `group_item_title` first, then event title as a fallback, and ranked by traded USDC volume.",
+        ),
+        QUESTION_THEME_UNIQUE: (
+            f"Bet themes with the most unique traders on {selected_date_sql}",
+            "Unique traders",
+            "%d",
+            "This highlights which kinds of bets attracted the broadest participation rather than just the largest dollar flow.",
+        ),
+        QUESTION_THEME_AVG_BET: (
+            f"Bet themes with the largest average bet on {selected_date_sql}",
+            "Average trade size (USDC)",
+            "$%.2f",
+            "This contrasts themes dominated by larger average positions against themes with smaller trade sizing.",
+        ),
+        QUESTION_THEME_ACTIVITY: (
+            f"Most active bet themes on {selected_date_sql}",
+            "Trades",
+            "%d",
+            "This emphasizes sheer trading frequency, which can differ meaningfully from both total volume and trader breadth.",
+        ),
+    }[question_name]
+    st.subheader(header)
+    st.caption(caption)
 
     if themes_df.empty:
         st.warning("No market-theme rows were found for the selected day.")
@@ -2467,6 +2489,8 @@ def render_data_analysis_page() -> None:
                 QUESTION_MOST_DIVERSIFIED,
                 QUESTION_THEME_VOLUME,
                 QUESTION_THEME_UNIQUE,
+                QUESTION_THEME_AVG_BET,
+                QUESTION_THEME_ACTIVITY,
                 QUESTION_DAILY_VOLUME,
                 QUESTION_BIG_VS_SMALL,
                 QUESTION_TRADER_PROFILE,
@@ -2571,7 +2595,12 @@ def render_data_analysis_page() -> None:
         )
     elif question_name == QUESTION_DAILY_VOLUME:
         render_daily_volume_question(history_days, market_limit, trader_limit)
-    elif question_name in {QUESTION_THEME_VOLUME, QUESTION_THEME_UNIQUE}:
+    elif question_name in {
+        QUESTION_THEME_VOLUME,
+        QUESTION_THEME_UNIQUE,
+        QUESTION_THEME_AVG_BET,
+        QUESTION_THEME_ACTIVITY,
+    }:
         render_theme_daily_question(question_name, selected_date_sql, market_limit)
     elif question_name == QUESTION_BIG_VS_SMALL:
         render_big_vs_small_question(min_total_trades)
