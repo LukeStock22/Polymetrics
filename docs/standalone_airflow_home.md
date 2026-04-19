@@ -15,6 +15,8 @@ After setup, this repo acts as `AIRFLOW_HOME` and contains:
 The pipeline code itself remains in:
 
 - [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py)
+- [dags/gamma_markets_daily.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_daily.py)
+- [dags/gamma_markets_catchup.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_catchup.py)
 - [src/polymarket_etl](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl)
 
 ## What to copy from `airflow25`
@@ -123,14 +125,14 @@ airflow users create \
   --password 'change-me-now'
 ```
 
-## Step 6: Confirm the DAG loads
+## Step 6: Confirm the DAGs load
 
 ```bash
-airflow dags list | rg gamma_markets_to_snowflake
+airflow dags list | rg gamma_markets_
 airflow dags list-import-errors
 ```
 
-If the DAG does not appear, fix import errors before doing anything with Snowflake.
+If the DAGs do not appear, fix import errors before doing anything with Snowflake.
 
 ## Step 7: Start Airflow
 
@@ -154,6 +156,8 @@ airflow api-server --port 8080
 ```
 
 Then open the UI and confirm the DAG is visible.
+
+Reminder: scheduled runs only happen while the Airflow scheduler is running in an active Linuxlab session. If the session ends, daily runs will pause until Airflow is restarted.
 
 ## Step 8: Trigger the pipeline
 

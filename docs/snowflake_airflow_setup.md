@@ -1,6 +1,9 @@
 # PolyMetrics Gamma to Snowflake
 
-This repo now has a first-pass ingestion path for `data/raw/gamma/markets/*.json` into Snowflake.
+This repo now has a first-pass ingestion path for Gamma markets into Snowflake, including:
+
+- `gamma_markets_daily` (scheduled batch)
+- `gamma_markets_catchup` (backfill / recovery)
 
 ## What gets created
 
@@ -18,6 +21,8 @@ This repo now has a first-pass ingestion path for `data/raw/gamma/markets/*.json
 ## Repo files
 
 - [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py)
+- [dags/gamma_markets_daily.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_daily.py)
+- [dags/gamma_markets_catchup.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_catchup.py)
 - [src/polymarket_etl/market_files.py](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl/market_files.py)
 - [src/polymarket_etl/snowflake_sql.py](/home/compute/l.d.stockbridge/Polymetrics/src/polymarket_etl/snowflake_sql.py)
 - [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/Polymetrics/sql/snowflake/00_bootstrap_polymarket.sql)
@@ -35,7 +40,7 @@ export PYTHONPATH=/home/compute/l.d.stockbridge/Polymetrics/src:$PYTHONPATH
 
 If you want this repo to act as its own `AIRFLOW_HOME`, see [standalone_airflow_home.md](/home/compute/l.d.stockbridge/Polymetrics/docs/standalone_airflow_home.md).
 
-The DAG assumes the Airflow connection already exists and has permission to:
+The DAGs assume the Airflow connection already exists and has permission to:
 
 - create databases, schemas, stages, file formats, and tables
 - `PUT` local files into the internal stage
@@ -87,13 +92,17 @@ That means the Airflow connection exists, but if your current auth method is key
 1. Run [sql/snowflake/00_bootstrap_polymarket.sql](/home/compute/l.d.stockbridge/Polymetrics/sql/snowflake/00_bootstrap_polymarket.sql) manually if you want to validate object creation before Airflow.
 2. Copy or mount [dags/gamma_markets_to_snowflake.py](/home/compute/l.d.stockbridge/Polymetrics/dags/gamma_markets_to_snowflake.py) into your Airflow `dags/` folder.
 3. Make sure the repo `src/` directory is on Airflow `PYTHONPATH`.
-4. Trigger `gamma_markets_to_snowflake`.
+4. Trigger `gamma_markets_catchup` once to reconcile history.
+5. Trigger or schedule `gamma_markets_daily` for ongoing updates.
 
 ## Load behavior
 
-- The DAG scans local JSON files and uploads every file to the Snowflake stage with `OVERWRITE=TRUE`.
+- The new DAGs fetch from Gamma directly during the run, then upload to the Snowflake stage with `OVERWRITE=TRUE`.
 - Raw deduping is handled by `MERGE` on `(source_file_name, file_content_key)`.
 - The curated `GAMMA_MARKETS` table keeps only the newest version per `market_id`, based on `updatedAt` from the payload and then `raw_loaded_at`.
+ - `processed_at` records the time the curated row was written.
+
+All Gamma API fields are preserved in `market_payload`, and the curated table also includes explicit columns for top-level API fields to support analytics without JSON parsing.
 
 ## Known constraints
 
