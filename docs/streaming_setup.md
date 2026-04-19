@@ -76,7 +76,7 @@ docker compose exec kafka kafka-topics \
 In one terminal:
 
 ```bash
-python -m polymarket_streaming --sink kafka --log-level INFO
+python3 -m polymarket_streaming --sink kafka --log-level INFO
 ```
 
 Expected log lines within ~30s:
@@ -94,7 +94,7 @@ message count tick up.
 In a second terminal (same env sourced):
 
 ```bash
-python -m polymarket_streaming.kafka_consumer_to_snowflake \
+python3 -m polymarket_streaming.kafka_consumer_to_snowflake \
   --flush-interval 30 --flush-max-rows 5000
 ```
 
@@ -154,7 +154,7 @@ After=docker.service
 [Service]
 WorkingDirectory=/home/%u/Polymetrics
 EnvironmentFile=/home/%u/Polymetrics/.env.streaming
-ExecStart=/home/%u/Polymetrics/.venv/bin/python -m polymarket_streaming --sink kafka
+ExecStart=/home/%u/Polymetrics/.venv/bin/python3 -m polymarket_streaming --sink kafka
 Restart=always
 RestartSec=10
 
