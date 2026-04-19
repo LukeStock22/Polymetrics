@@ -10,6 +10,8 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowException
 
+from asset_defs import CURATED_GAMMA_MARKETS_ASSET, CURATED_USER_ACTIVITY_ASSET
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = PROJECT_ROOT / "src" / "polymarket_etl" / "build_analytics_layer.py"
@@ -33,12 +35,12 @@ def get_snowflake_hook():
 
 @dag(
     dag_id="analytics_layer_refresh",
-    schedule="25 * * * *",
+    schedule=(CURATED_GAMMA_MARKETS_ASSET | CURATED_USER_ACTIVITY_ASSET),
     start_date=pendulum.datetime(2026, 4, 18, tz="America/Chicago"),
     catchup=False,
     max_active_runs=1,
     default_args={"owner": "polymetrics"},
-    tags=["polymarket", "analytics", "snowflake", "snowpark", "hourly"],
+    tags=["polymarket", "analytics", "snowflake", "snowpark", "asset-aware"],
 )
 def analytics_layer_refresh():
     @task()

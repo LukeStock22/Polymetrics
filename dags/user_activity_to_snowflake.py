@@ -1,15 +1,40 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.decorators import task
+from airflow.exceptions import AirflowException
+from airflow.hooks.base import BaseHook
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 import os
 import glob #Glob is used to get parquet files from folder
 import shutil #shutil is used to move files across folders
 
-SNOWFLAKE_CONN_ID = "Snowflake_Default" 
+from asset_defs import CURATED_USER_ACTIVITY_ASSET
+
+SNOWFLAKE_CONN_ID = os.environ.get("POLYMARKET_SNOWFLAKE_CONN_ID")
 STAGE_NAME = "@POLYMARKET_STAGE/user_activity"
 LANDING_DIR = "/home/compute/andelman.w/PolyMarket/data/"
 ARCHIVE_DIR = "/home/compute/andelman.w/PolyMarket/data/archive/"
+
+
+def get_snowflake_hook() -> SnowflakeHook:
+    candidate_conn_ids = (
+        [SNOWFLAKE_CONN_ID]
+        if SNOWFLAKE_CONN_ID
+        else ["Snowflake", "Snowflake_Default"]
+    )
+
+    for conn_id in candidate_conn_ids:
+        try:
+            BaseHook.get_connection(conn_id)
+            return SnowflakeHook(snowflake_conn_id=conn_id)
+        except Exception:
+            continue
+
+    raise AirflowException(
+        "No usable Snowflake connection was found for the user activity DAG. "
+        "Set POLYMARKET_SNOWFLAKE_CONN_ID or create either 'Snowflake' or "
+        "'Snowflake_Default' in Airflow."
+    )
 
 with DAG(
     dag_id='polymarket_activity_pipeline_dag',
@@ -20,7 +45,7 @@ with DAG(
 
     @task
     def snowflake_objects():
-        hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
+        hook = get_snowflake_hook()
         sql_queries = [
             #Create stage if none exists
             "CREATE STAGE IF NOT EXISTS POLYMARKET_STAGE;",
@@ -68,7 +93,7 @@ with DAG(
             print("No new parquet files found. Skip upload.")
             return False
 
-        hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
+        hook = get_snowflake_hook()
 
         #upload files to stage
         for file in parquet_files:
@@ -80,14 +105,14 @@ with DAG(
         #other tasks will use file list
         return parquet_files
     
-    @task
+    @task(outlets=[CURATED_USER_ACTIVITY_ASSET])
     def process_data(files_uploaded: list):
 
         if not files_uploaded:
             print("No files were uploaded. Skipping processing.")
             return files_uploaded
 
-        hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
+        hook = get_snowflake_hook()
         # Atomic Operation
         #1. Create temporary table to be dropped on COMMIT
         #2. COPY INTO temp table from stage, use $1 column notation to get Parquet Cols, TRY_CAST is overkill (data should be clean) but why not

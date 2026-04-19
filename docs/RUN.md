@@ -79,6 +79,7 @@ You should see:
 - `gamma_markets_to_snowflake`
 - `gamma_markets_daily`
 - `gamma_markets_catchup`
+- `polymarket_activity_pipeline_dag`
 - `analytics_layer_refresh`
 
 ## 5) Trigger a DAG manually (optional)
@@ -93,7 +94,58 @@ To trigger the analytics refresh manually:
 airflow dags trigger analytics_layer_refresh
 ```
 
-## 5.1) Run the analytics build once in the same Airflow shell
+## 5.1) Dataset-aware scheduling: how analytics now starts
+
+`analytics_layer_refresh` is no longer driven by a fixed hourly cron. It is now data-aware and subscribes to two logical Airflow dataset assets:
+
+- `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS`
+- `snowflake://COYOTE_DB/PUBLIC/CURATED_POLYMARKET_USER_ACTIVITY`
+
+Those assets are emitted when these upstream tasks finish successfully:
+
+- `gamma_markets_daily.upsert_curated_markets`
+- `polymarket_activity_pipeline_dag.process_data`
+
+That means the analytics DAG is scheduled when curated market data changes, when curated user activity changes, or when both change close together.
+
+Why this design was chosen:
+
+- it matches the class recommendation for data-aware scheduling
+- it avoids sensor-style polling
+- it ties orchestration to successful data publication rather than clock time
+- it is easy to explain as logical data dependency management in Airflow
+
+Tradeoffs:
+
+- dataset events are Airflow metadata events, not direct Snowflake table watches
+- all participating DAGs need to live in the same Airflow environment for this to work cleanly
+- analytics can fire after either upstream changes, so the build script still needs incremental logic and idempotent rebuild behavior
+
+To verify the wiring after `airflow dags reserialize`:
+
+```bash
+airflow dags details analytics_layer_refresh
+```
+
+Then trigger one upstream DAG, for example:
+
+```bash
+airflow dags trigger gamma_markets_daily
+```
+
+or:
+
+```bash
+airflow dags trigger polymarket_activity_pipeline_dag
+```
+
+After the upstream publish task succeeds, check whether analytics was automatically scheduled:
+
+```bash
+airflow dags list-runs analytics_layer_refresh
+```
+
+## 5.2) Run the analytics build once in the same Airflow shell
 
 If you want to test the analytics build directly before relying on the DAG, run the same Snowpark build script that `analytics_layer_refresh` calls:
 
@@ -145,7 +197,7 @@ Concretely:
 
 - `start` = `MAX(updated_at)` from `CURATED.GAMMA_MARKETS`
 - `end` = max(`data_interval_end`, `now`) at runtime
-- analytics refresh time = `25` minutes past each hour by default
+- analytics refresh trigger = Airflow dataset event from curated markets or curated user activity
 
 ## 6) Start the Airflow services (for scheduled runs)
 
@@ -166,4 +218,6 @@ curl -s http://127.0.0.1:8080/api/v2/monitor/health
 - Always run Airflow in the same `qlogin-airflow25` session you used to initialize the DB.
 - If the session ends, scheduled jobs will stop until Airflow is restarted.
 - On a new node, treat the startup as a reconnect: run `airflow db migrate`, recreate or verify `Snowflake`, then run `airflow dags reserialize` before triggering the catch-up DAG.
- - If a daily run fails before `upsert_curated_markets`, the watermark does not advance. If it fails after `upsert_curated_markets` (for example, in a DQ check), curated has already been updated so the watermark has advanced even though the DAG is marked failed.
+- If a daily run fails before `upsert_curated_markets`, the watermark does not advance and no curated-markets dataset event is emitted.
+- If a daily run fails after `upsert_curated_markets` succeeds, curated has already been updated and the dataset event has already been emitted even if a later DQ task fails.
+- If `polymarket_activity_pipeline_dag.process_data` succeeds, it emits the curated user-activity dataset event that can trigger `analytics_layer_refresh`.
