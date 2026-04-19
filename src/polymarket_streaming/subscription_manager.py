@@ -32,27 +32,62 @@ class SubscriptionManager:
         return self._asset_ids
 
     def refresh_from_snowflake(self) -> list[str]:
-        """Query CURATED.GAMMA_MARKETS for active markets' asset IDs."""
+        """Query CURATED.GAMMA_MARKETS for active markets' asset IDs.
+
+        Orders by tracked 24h volume descending and limits to
+        ``top_n_markets`` (0 = no limit). Falls back to unordered
+        all-active selection if the volume column is absent.
+        """
         sf = self._config.snowflake
-        conn = snowflake.connector.connect(
+        connect_args = dict(
             account=sf.account,
             user=sf.user,
-            password=sf.password,
             database=sf.database,
             warehouse=sf.warehouse,
             role=sf.role,
         )
+        if sf.private_key_path:
+            from cryptography.hazmat.primitives import serialization
+            from pathlib import Path
+            key_bytes = Path(sf.private_key_path).read_bytes()
+            private_key = serialization.load_pem_private_key(key_bytes, password=None)
+            connect_args["private_key"] = private_key.private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        else:
+            connect_args["password"] = sf.password
+
+        conn = snowflake.connector.connect(**connect_args)
         try:
             cur = conn.cursor()
-            cur.execute("""
-                SELECT market_id,
-                       clob_token_ids,
-                       end_date
-                FROM   PANTHER_DB.CURATED.GAMMA_MARKETS
-                WHERE  active = TRUE
-                  AND  closed = FALSE
-                  AND  clob_token_ids IS NOT NULL
-            """)
+            limit_clause = f"LIMIT {int(self._config.top_n_markets)}" if self._config.top_n_markets else ""
+            # Try volume-ordered query first, then fall back if column missing.
+            try:
+                cur.execute(f"""
+                    SELECT market_id,
+                           clob_token_ids,
+                           end_date
+                    FROM   PANTHER_DB.CURATED.GAMMA_MARKETS
+                    WHERE  active = TRUE
+                      AND  closed = FALSE
+                      AND  clob_token_ids IS NOT NULL
+                    ORDER BY COALESCE(volume_24hr, volume, 0) DESC NULLS LAST
+                    {limit_clause}
+                """)
+            except snowflake.connector.errors.ProgrammingError:
+                log.warning("Volume-ordered query failed, falling back to unordered")
+                cur.execute(f"""
+                    SELECT market_id,
+                           clob_token_ids,
+                           end_date
+                    FROM   PANTHER_DB.CURATED.GAMMA_MARKETS
+                    WHERE  active = TRUE
+                      AND  closed = FALSE
+                      AND  clob_token_ids IS NOT NULL
+                    {limit_clause}
+                """)
             asset_ids = []
             for row in cur:
                 market_id, token_ids_raw, end_date = row

@@ -19,6 +19,19 @@ class SnowflakeConfig:
 
 
 @dataclass(frozen=True)
+class KafkaConfig:
+    bootstrap_servers: str = field(default_factory=lambda: os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
+    client_id: str = field(default_factory=lambda: os.environ.get("KAFKA_CLIENT_ID", "polymarket-producer"))
+    topic_trades: str = field(default_factory=lambda: os.environ.get("KAFKA_TOPIC_TRADES", "polymarket.trades.raw"))
+    topic_books: str = field(default_factory=lambda: os.environ.get("KAFKA_TOPIC_BOOKS", "polymarket.books.raw"))
+    topic_anomalies: str = field(default_factory=lambda: os.environ.get("KAFKA_TOPIC_ANOMALIES", "polymarket.anomalies"))
+    linger_ms: int = int(os.environ.get("KAFKA_LINGER_MS", "50"))
+    batch_size: int = int(os.environ.get("KAFKA_BATCH_SIZE", "65536"))
+    compression: str = field(default_factory=lambda: os.environ.get("KAFKA_COMPRESSION", "lz4"))
+    consumer_group: str = field(default_factory=lambda: os.environ.get("KAFKA_CONSUMER_GROUP", "polymetrics-snowflake-sink"))
+
+
+@dataclass(frozen=True)
 class StreamConfig:
     # Websocket
     ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
@@ -26,12 +39,13 @@ class StreamConfig:
     reconnect_delay_sec: float = 5.0
     max_reconnect_delay_sec: float = 60.0
 
-    # Buffer / flush
+    # Buffer / flush (Snowflake direct path only)
     flush_interval_sec: float = float(os.environ.get("STREAM_FLUSH_INTERVAL", "30"))
     flush_max_rows: int = int(os.environ.get("STREAM_FLUSH_MAX_ROWS", "5000"))
 
-    # Subscription
-    max_assets_per_connection: int = 200
+    # Subscription — top-N markets by 24h volume (0 = all active)
+    max_assets_per_connection: int = int(os.environ.get("STREAM_MAX_ASSETS", "400"))
+    top_n_markets: int = int(os.environ.get("STREAM_TOP_N_MARKETS", "200"))
     subscribe_active_only: bool = True
 
     # Data API (REST) for enrichment
@@ -41,6 +55,9 @@ class StreamConfig:
 
     # Snowflake
     snowflake: SnowflakeConfig = field(default_factory=SnowflakeConfig)
+
+    # Kafka
+    kafka: KafkaConfig = field(default_factory=KafkaConfig)
 
 
 @dataclass(frozen=True)
