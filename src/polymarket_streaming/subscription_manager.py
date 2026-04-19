@@ -110,12 +110,16 @@ class SubscriptionManager:
 
     def refresh_from_api(self) -> list[str]:
         """Fallback: fetch active markets from the Gamma REST API."""
-        import urllib.request
+        import requests
 
-        url = f"{self._config.gamma_api_base}/markets?active=true&closed=false&limit=200"
-        req = urllib.request.Request(url, headers={"User-Agent": "PolyMetrics/1.0"})
-        with urllib.request.urlopen(req) as resp:
-            markets = json.loads(resp.read())
+        limit = self._config.top_n_markets or 200
+        url = f"{self._config.gamma_api_base}/markets"
+        params = {"active": "true", "closed": "false", "limit": limit}
+        resp = requests.get(
+            url, params=params, headers={"User-Agent": "PolyMetrics/1.0"}, timeout=30
+        )
+        resp.raise_for_status()
+        markets = resp.json()
 
         asset_ids = []
         for m in markets:
