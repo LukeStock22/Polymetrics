@@ -1,0 +1,11 @@
+# PyFlink job dependencies — installed inside the Flink container.
+# See src/polymarket_flink/README.md for usage.
+
+apache-flink>=1.20,<1.21
+
+# Snowflake sink needs these at submit-time
+snowflake-connector-python>=3.6.0
+cryptography>=42.0
+
+# Detector logic (already bundled in src/ via bind mount)
+numpy>=1.26
