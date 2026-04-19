@@ -1,0 +1,19 @@
+# Dependencies for the streaming pipeline and anomaly detection.
+# Install with: pip install -r requirements-streaming.txt
+
+# Websocket client — 13.x required for the websockets.asyncio.client API
+websockets>=13.0,<14.0
+
+# Kafka producer/consumer (librdkafka-backed, fast)
+confluent-kafka>=2.4
+
+# Snowflake connector (used by the streamer outside Airflow)
+snowflake-connector-python[pandas]>=3.6.0
+
+# ML / anomaly detection
+scikit-learn>=1.4
+numpy>=1.26
+pandas>=2.1
+
+# Key-pair auth (required for programmatic Snowflake writes on linuxlab)
+cryptography>=42.0

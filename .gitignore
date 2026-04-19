@@ -11,6 +11,13 @@ simple_auth_manager_passwords.json.generated
 # Generated local data
 data/raw/
 
+# Virtual environment
+.venv/
+
+# Streaming runtime secrets (template is tracked as .env.streaming.example)
+.env.streaming
+.env
+
 # Common local/editor clutter
 .DS_Store
 

@@ -1,0 +1,95 @@
+name: polymetrics-streaming
+
+# Local / linuxlab streaming stack:
+#   zookeeper + kafka (broker)
+#   kafka-ui (browser, http://localhost:8081)
+#   flink-jobmanager (browser, http://localhost:8082)
+#   flink-taskmanager
+#
+# Bring up:   docker compose up -d
+# Tear down:  docker compose down
+# Wipe data:  docker compose down -v
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # 7-day retention per the project plan
+      KAFKA_LOG_RETENTION_HOURS: 168
+      # Soft per-partition cap (50 GB) — prevents the broker from
+      # filling its volume if a market produces an unexpected flood.
+      KAFKA_LOG_RETENTION_BYTES: 50000000000
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+  flink-jobmanager:
+    image: flink:1.20-scala_2.12-java17
+    restart: unless-stopped
+    command: jobmanager
+    ports:
+      - "8082:8081"
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        state.backend: rocksdb
+        state.checkpoints.dir: file:///flink/checkpoints
+        execution.checkpointing.interval: 60000
+    volumes:
+      - flink-checkpoints:/flink/checkpoints
+      - ./src/polymarket_flink:/opt/polymarket_flink:ro
+      - ${HOME}/.snowflake_keys:/root/.snowflake_keys:ro
+
+  flink-taskmanager:
+    image: flink:1.20-scala_2.12-java17
+    restart: unless-stopped
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+    volumes:
+      - flink-checkpoints:/flink/checkpoints
+      - ./src/polymarket_flink:/opt/polymarket_flink:ro
+      - ${HOME}/.snowflake_keys:/root/.snowflake_keys:ro
+
+volumes:
+  kafka-data:
+  flink-checkpoints:

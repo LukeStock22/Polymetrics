@@ -2621,6 +2621,10 @@ def main() -> None:
                 Path(__file__).parent / "pages" / "2_Data_Availability.py",
                 title="Data Availability",
             ),
+            st.Page(
+                Path(__file__).parent / "pages" / "3_Anomaly_Detection.py",
+                title="Anomaly Detection",
+            ),
         ]
     )
     navigation.run()
