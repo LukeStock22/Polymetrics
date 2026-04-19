@@ -59,14 +59,20 @@ def gamma_markets_catchup():
     @task()
     def compute_windows() -> List[Dict[str, str]]:
         from airflow.exceptions import AirflowSkipException
+        from airflow.sdk import get_current_context
 
+        ctx = get_current_context()
+        dag_run = ctx.get("dag_run")
+        full_history = bool(dag_run and dag_run.conf and dag_run.conf.get("full_history"))
         hook = get_snowflake_hook()
         watermark = hook.get_first(
             f"SELECT MAX(updated_at) FROM {SNOWFLAKE_DATABASE}.CURATED.GAMMA_MARKETS"
         )[0]
         tz = pendulum.timezone("America/Chicago")
         end = pendulum.now(tz).start_of("day")
-        if watermark:
+        if full_history:
+            start = pendulum.datetime(2000, 1, 1, tz="UTC").in_timezone(tz)
+        elif watermark:
             start = pendulum.instance(watermark, tz=tz)
         else:
             start = pendulum.datetime(2000, 1, 1, tz="UTC").in_timezone(tz)

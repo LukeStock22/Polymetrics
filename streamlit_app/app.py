@@ -148,6 +148,19 @@ def sql_string_literal(value: str) -> str:
     return value.replace("'", "''")
 
 
+def resolved_market_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return " AND ".join(
+        [
+            f"{prefix}market_id IS NOT NULL",
+            f"{prefix}condition_id IS NOT NULL",
+            f"{prefix}market_label IS NOT NULL",
+            f"{prefix}market_label <> ''",
+            f"{prefix}market_label <> {prefix}condition_id",
+        ]
+    )
+
+
 def load_app_config() -> AppConfig:
     app_settings = dict(st.secrets["app"]) if "app" in st.secrets else {}
     return AppConfig(
@@ -548,6 +561,7 @@ def fetch_tracked_markets_for_day(selected_date: str, market_limit: int) -> pd.D
             last_trade_ts
         FROM {app_config.tracked_market_volume_daily_table}
         WHERE trade_date = '{selected_date}'
+          AND {resolved_market_predicate()}
         ORDER BY total_volume_usdc DESC, trade_count DESC, market_label ASC
         LIMIT {market_limit}
     """
@@ -584,6 +598,7 @@ def fetch_market_daily_rankings(
             last_trade_ts
         FROM {app_config.fact_market_daily_table}
         WHERE stat_date = '{selected_date}'
+          AND {resolved_market_predicate()}
         ORDER BY {order_by}
         LIMIT {market_limit}
     """
@@ -617,6 +632,7 @@ def fetch_market_concentration_for_day(
             last_trade_ts
         FROM {app_config.market_concentration_daily_table}
         WHERE trade_date = '{selected_date}'
+          AND {resolved_market_predicate()}
         ORDER BY top_5_share_volume DESC, total_volume_usdc DESC, market_label ASC
         LIMIT {market_limit}
     """
@@ -637,6 +653,7 @@ def fetch_market_concentration_for_day(
                 last_trade_ts
             FROM {app_config.fact_market_daily_table}
             WHERE stat_date = '{selected_date}'
+              AND {resolved_market_predicate()}
         ),
         trader_ranked AS (
             SELECT
@@ -697,7 +714,10 @@ def fetch_market_concentration_for_day(
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_highest_volume_markets(market_limit: int, open_only: bool) -> pd.DataFrame:
     app_config = load_app_config()
-    open_filter = "WHERE closed = FALSE" if open_only else ""
+    filters = [resolved_market_predicate()]
+    if open_only:
+        filters.append("closed = FALSE")
+    where_clause = f"WHERE {' AND '.join(filters)}"
     query = f"""
         SELECT
             market_id,
@@ -709,7 +729,7 @@ def fetch_highest_volume_markets(market_limit: int, open_only: bool) -> pd.DataF
             end_date,
             total_volume_usdc
         FROM {app_config.highest_volume_markets_table}
-        {open_filter}
+        {where_clause}
         ORDER BY total_volume_usdc DESC, market_label ASC
         LIMIT {market_limit}
     """
@@ -747,6 +767,7 @@ def fetch_theme_daily_rankings(
             last_trade_ts
         FROM {app_config.market_theme_daily_table}
         WHERE trade_date = '{selected_date}'
+          AND market_theme_source <> 'FACT_FALLBACK'
         ORDER BY {order_by}
         LIMIT {theme_limit}
     """
@@ -779,6 +800,7 @@ def fetch_theme_daily_rankings(
         LEFT JOIN latest_markets m
           ON f.condition_id = m.condition_id
         WHERE f.trade_date = '{selected_date}'
+          AND {resolved_market_predicate('f')}
         GROUP BY
             f.trade_date,
             COALESCE(
@@ -825,6 +847,7 @@ def fetch_markets_for_theme_day(
         LEFT JOIN {app_config.dim_markets_table} d
           ON f.condition_id = d.condition_id
         WHERE f.stat_date = '{selected_date}'
+          AND {resolved_market_predicate('f')}
           AND COALESCE(
                 d.market_theme,
                 d.market_group_title,
@@ -866,6 +889,7 @@ def fetch_markets_for_theme_day(
         LEFT JOIN latest_markets m
           ON f.condition_id = m.condition_id
         WHERE f.stat_date = '{selected_date}'
+          AND {resolved_market_predicate('f')}
           AND COALESCE(
                 m.market_theme,
                 m.market_group_title,
@@ -900,6 +924,7 @@ def fetch_largest_bets_for_day(selected_date: str, market_limit: int) -> pd.Data
             transaction_hash
         FROM {app_config.fact_user_activity_trades_table}
         WHERE trade_date = '{selected_date}'
+          AND {resolved_market_predicate()}
         ORDER BY usdc_volume DESC, trade_ts DESC, market_label ASC
         LIMIT {market_limit}
     """
@@ -1112,6 +1137,7 @@ def fetch_trader_market_footprint(proxy_wallet: str, market_limit: int) -> pd.Da
             MAX(trade_ts) AS last_trade_ts
         FROM {app_config.fact_user_activity_trades_table}
         WHERE proxy_wallet = '{escaped_wallet}'
+          AND {resolved_market_predicate()}
         GROUP BY market_label, condition_id
         ORDER BY total_volume_usdc DESC, trade_count DESC, market_label ASC
         LIMIT {market_limit}
@@ -1134,6 +1160,7 @@ def fetch_trader_recent_trades(proxy_wallet: str, trade_limit: int) -> pd.DataFr
             size
         FROM {app_config.fact_user_activity_trades_table}
         WHERE proxy_wallet = '{escaped_wallet}'
+          AND {resolved_market_predicate()}
         ORDER BY trade_ts DESC
         LIMIT {trade_limit}
     """
