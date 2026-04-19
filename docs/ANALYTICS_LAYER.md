@@ -2,6 +2,8 @@
 
 This document describes the warehouse-driven analytics layer in `PANTHER_DB.ANALYTICS`:
 
+For a visual lineage view with join keys, see [ANALYTICS_LAYER_DIAGRAM.md](/Users/lukestockbridge/Desktop/School/CSE5114/Polymetrics/docs/ANALYTICS_LAYER_DIAGRAM.md).
+
 - what it is
 - how it is built
 - whether it is scheduled
@@ -24,7 +26,10 @@ python src/polymarket_etl/build_analytics_layer.py --config-path .streamlit/secr
 Scheduled build:
 
 - DAG id: `analytics_layer_refresh`
-- schedule: `25 * * * *`
+- schedule type: Airflow dataset-aware scheduling
+- subscribed assets:
+  - `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS`
+  - `snowflake://COYOTE_DB/PUBLIC/CURATED_POLYMARKET_USER_ACTIVITY`
 - default mode: `incremental`
 
 The build script:
@@ -39,9 +44,37 @@ There is currently:
 
 - an Airflow DAG for the analytics build
 - incremental refresh logic driven by `COYOTE._LOADED_AT`
+- Airflow dataset-based orchestration between upstream curated DAGs and the analytics DAG
 - no Snowflake-native task/stream orchestration yet
 
-So the analytics layer is materialized and warehouse-driven, and it now has an Airflow scheduling path. The remaining orchestration gap is Snowflake-native scheduling if you eventually want to remove Airflow from the analytics refresh step.
+So the analytics layer is materialized and warehouse-driven, and it now has an Airflow scheduling path that is data-aware rather than time-only. The remaining orchestration gap is Snowflake-native scheduling if you eventually want to remove Airflow from the analytics refresh step.
+
+## Orchestration design choice
+
+The project now uses Airflow datasets as the connection between upstream curated data publication and the downstream analytics refresh.
+
+Upstream dataset publishers:
+
+- `gamma_markets_daily.upsert_curated_markets` publishes `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS`
+- `polymarket_activity_pipeline_dag.process_data` publishes `snowflake://COYOTE_DB/PUBLIC/CURATED_POLYMARKET_USER_ACTIVITY`
+
+Downstream subscriber:
+
+- `analytics_layer_refresh` subscribes to either dataset and runs the Snowpark build when one of them is updated
+
+Why this is a strong choice for the project:
+
+- it matches the class recommendation for data-aware scheduling
+- it is event-driven, so Airflow does not need long-running polling sensors
+- it creates a clean architecture story: curated data is published first, analytics materializations follow
+- it keeps Streamlit decoupled from upstream ETL timing because the app reads materialized marts
+
+Tradeoffs:
+
+- dataset events are logical Airflow asset updates, not native Snowflake change capture
+- the DAGs must share one Airflow environment and metadata database
+- a run can be triggered by only one upstream changing, so the analytics build must remain incremental and idempotent
+- this still does not replace a fully Snowflake-native orchestration model built on streams and tasks
 
 ## Why this layer exists
 

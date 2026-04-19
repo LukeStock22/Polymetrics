@@ -8,6 +8,7 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowException
 
+from asset_defs import CURATED_GAMMA_MARKETS_ASSET
 from polymarket_etl.gamma_fetch import GammaSource, GAMMA_MARKETS_BASE, write_market_pages
 from polymarket_etl.gamma_ingest import build_manifest_rows_sql, put_files_to_stage
 from polymarket_etl.snowflake_sql import (
@@ -148,7 +149,7 @@ def gamma_markets_daily():
         for sql in statements:
             hook.run(sql)
 
-    @task()
+    @task(outlets=[CURATED_GAMMA_MARKETS_ASSET])
     def upsert_curated_markets() -> None:
         hook = get_snowflake_hook()
         hook.run(merge_curated_markets_sql(SNOWFLAKE_DATABASE))
