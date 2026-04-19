@@ -31,6 +31,7 @@ def get_snowflake_hook():
 
 
 @dag(
+    is_paused_upon_creation=True,
     dag_id="anomaly_attribution",
     schedule="0 8 * * *",
     start_date=datetime(2026, 4, 1),
