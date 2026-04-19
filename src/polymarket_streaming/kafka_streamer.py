@@ -14,7 +14,9 @@ import argparse
 import asyncio
 import logging
 import signal
+import ssl
 
+import certifi
 import websockets
 import websockets.asyncio.client as ws_client
 
@@ -71,8 +73,11 @@ class KafkaStreamer:
         self._running = False
 
     async def _connect_and_stream(self) -> None:
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
         async with ws_client.connect(
             self._sc.ws_url,
+            ssl=ssl_context,
+            max_size=16 * 1024 * 1024,  # 16 MB — initial book snapshot for 400 markets is ~1.5 MB
             ping_interval=self._sc.ping_interval_sec,
             ping_timeout=self._sc.ping_interval_sec * 2,
             close_timeout=5,
