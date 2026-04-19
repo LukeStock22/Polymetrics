@@ -437,13 +437,15 @@ def render_horizontal_bar_chart(
     label_title: str,
     value_title: str,
 ) -> None:
-    chart_df = (
-        df[[label_column, value_column]]
-        .copy()
-        .sort_values(value_column, ascending=False)
-        .reset_index(drop=True)
-    )
-    max_value = float(chart_df[value_column].max()) if not chart_df.empty else 0.0
+    chart_df = df[[label_column, value_column]].copy()
+    
+    
+    chart_df[value_column] = chart_df[value_column].fillna(0)
+    chart_df = chart_df.sort_values(value_column, ascending=False).reset_index(drop=True)
+    
+    max_val = chart_df[value_column].max()
+    
+    max_value = float(max_val) if pd.notna(max_val) else 0.0
     negative_padding = max(max_value * 0.05, 1.0)
 
     chart = (
