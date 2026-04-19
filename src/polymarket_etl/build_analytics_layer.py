@@ -1053,8 +1053,8 @@ def build_market_daily_df(fact_trades, fact_anomalies, dim_markets):
             round_(sum_("SIZE"), 6).alias("TOTAL_VOLUME"),
             round_(sum_("USDC_VOLUME"), 2).alias("TOTAL_USDC_VOLUME"),
             count_distinct("PROXY_WALLET").alias("UNIQUE_WALLETS"),
-            round_(avg("SIZE"), 6).alias("AVG_TRADE_SIZE"),
-            round_(max_("SIZE"), 6).alias("MAX_TRADE_SIZE"),
+            round_(avg("USDC_VOLUME"), 2).alias("AVG_TRADE_SIZE"),
+            round_(max_("USDC_VOLUME"), 2).alias("MAX_TRADE_SIZE"),
             round_(
                 sum_(col("PRICE") * col("SIZE")) / sum_(col("SIZE")),
                 6,
@@ -1175,8 +1175,8 @@ def build_wallet_daily_df(fact_trades, anomaly_attribution):
             sum_(when(col("TRADE_SIDE") == lit("SELL"), col("USDC_VOLUME")).otherwise(lit(0))),
             2,
         ).alias("SELL_VOLUME"),
-        round_(avg("SIZE"), 6).alias("AVG_TRADE_SIZE"),
-        round_(max_("SIZE"), 6).alias("MAX_TRADE_SIZE"),
+        round_(avg("USDC_VOLUME"), 2).alias("AVG_TRADE_SIZE"),
+        round_(max_("USDC_VOLUME"), 2).alias("MAX_TRADE_SIZE"),
     )
 
     enriched = grouped.join(
