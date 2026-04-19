@@ -40,7 +40,7 @@ def get_snowflake_hook():
 
 @dag(
     dag_id="gamma_markets_daily",
-    schedule="10 0 * * *",
+    schedule="0 * * * *",
     # schedule="33 * * * *",
     start_date=pendulum.datetime(2026, 4, 7, tz="America/Chicago"),
     catchup=False,
@@ -56,10 +56,18 @@ def gamma_markets_daily():
 
         ctx = get_current_context()
         tz = pendulum.timezone("America/Chicago")
-        interval_start = pendulum.instance(ctx["data_interval_start"]).in_timezone(tz)
-        interval_end = pendulum.instance(ctx["data_interval_end"]).in_timezone(tz)
+        interval_start_raw = ctx.get("data_interval_start")
+        interval_end_raw = ctx.get("data_interval_end")
         now = pendulum.now(tz)
-        end = interval_end if interval_end >= now else now
+
+        # Scheduled runs have a data interval; manual triggers do not.
+        if interval_start_raw is not None and interval_end_raw is not None:
+            interval_start = pendulum.instance(interval_start_raw).in_timezone(tz)
+            interval_end = pendulum.instance(interval_end_raw).in_timezone(tz)
+            end = interval_end if interval_end >= now else now
+        else:
+            interval_start = None
+            end = now
 
         hook = get_snowflake_hook()
         watermark = hook.get_first(
@@ -71,7 +79,10 @@ def gamma_markets_daily():
             else:
                 start = pendulum.instance(watermark).in_timezone(tz)
         else:
-            start = interval_start
+            if interval_start is not None:
+                start = interval_start
+            else:
+                start = end.subtract(hours=1)
 
         if start >= end:
             raise AirflowSkipException("Watermark is already current — nothing to update.")

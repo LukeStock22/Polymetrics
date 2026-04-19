@@ -91,7 +91,7 @@ airflow dags trigger gamma_markets_catchup
 To trigger the analytics refresh manually:
 
 ```bash
-airflow dags trigger analytics_layer_refresh
+
 ```
 
 ## 5.1) Dataset-aware scheduling: how analytics now starts
@@ -161,6 +161,16 @@ This should be run only after:
 - the `Snowflake` Airflow connection exists
 - `.streamlit/secrets.toml` exists at `POLYMARKET_ANALYTICS_CONFIG_PATH` and is valid in the Linux Airflow environment
 
+If `build_analytics_layer.py` fails with `ModuleNotFoundError: No module named 'snowflake.snowpark'` and the Airflow/container Python is read-only, install the analytics dependencies into the project-local target directory instead of site-packages:
+
+```bash
+mkdir -p "$POLYMARKET_ANALYTICS_SITE_PACKAGES"
+python -m pip install -r requirements-streamlit.txt --target "$POLYMARKET_ANALYTICS_SITE_PACKAGES"
+python -c "from snowflake.snowpark import Session; print('snowpark ok')"
+```
+
+`airflow_home.env.example` adds `POLYMARKET_ANALYTICS_SITE_PACKAGES` to `PYTHONPATH`, so the analytics DAG and the direct CLI build will both use those packages after you re-source the env file. If Airflow is already running, restart it after installing the packages.
+
 To force a one-time full rebuild instead of the default incremental mode:
 
 ```bash
@@ -181,6 +191,8 @@ Then check run state:
 
 ```bash
 airflow dags list-runs gamma_markets_catchup
+airflow dags list-runs gamma_markets_daily
+airflow dags list-runs analytics_layer_refresh
 ```
 
 To see task-level progress for a specific run:
@@ -188,16 +200,19 @@ To see task-level progress for a specific run:
 ```bash
 RUN_ID="<paste_run_id_here>"
 airflow tasks states-for-dag-run gamma_markets_catchup "$RUN_ID"
+airflow tasks states-for-dag-run gamma_markets_daily "$RUN_ID"
+airflow tasks states-for-dag-run analytics_layer_refresh "$RUN_ID"
 ```
 
 The catch-up DAG runs a single reconciliation window from the current watermark to yesterday midnight. Closed markets are filtered by `end_date_min`/`end_date_max`, so it avoids scanning the full closed history every run.
-The daily DAG uses the Airflow data interval but will also respect the latest `updated_at` watermark (it extends the window up to “now” and starts from the most recent curated update).
+The daily DAG uses the Airflow data interval for scheduled runs but will also respect the latest `updated_at` watermark.
+If you trigger `gamma_markets_daily` manually, Airflow does not provide `data_interval_start` / `data_interval_end`, so the DAG falls back to a watermark-based window ending at `now`.
 The analytics DAG runs the Snowpark build script in `incremental` mode by default and verifies that the core analytics tables plus `ANALYTICS_BUILD_STATE` are present afterward.
 Concretely:
-
 - `start` = `MAX(updated_at)` from `CURATED.GAMMA_MARKETS`
 - `end` = max(`data_interval_end`, `now`) at runtime
-- analytics refresh trigger = Airflow dataset event from curated markets or curated user activity
+- analytics refresh time = `25` minutes past each hour by default
+
 
 ## 6) Start the Airflow services (for scheduled runs)
 

@@ -19,3 +19,6 @@ data/raw/
 
 rsa_key_airflow.p8
 secrets.toml
+
+.venv-analytics
+.analytics-site-packages
