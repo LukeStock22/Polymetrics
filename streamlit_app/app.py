@@ -326,7 +326,7 @@ def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
         ORDER BY t.trade_ts DESC
         LIMIT {trade_limit}
     """
-    return run_query_to_pandas(query)@st.cache_data(ttl=300, show_spinner=False)
+    return run_query_to_pandas(query)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
