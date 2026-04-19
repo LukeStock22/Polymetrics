@@ -29,7 +29,7 @@ JSON_TRACKER = f"{DIR}progress/wallet_tracking.json"
 PARQUET_DIR = f"{DIR}data/parquet/"
 STOP_FILE = f"{DIR}progress/STOP.txt"
  
-WORKER_COUNT = 145
+WORKER_COUNT = 40
 CHUNK_SIZE = 5_000_000
 
 class PerformanceStats:
@@ -87,7 +87,7 @@ class ParquetChunkManager:
         self.buffer = []
         self.completed_wallets_queue = [] 
         self.watermarks = {}
-        self.chunk_index = 1
+        self.chunk_index = 26
         self.lock = asyncio.Lock()
         
         if not os.path.exists(PARQUET_DIR):
@@ -281,6 +281,7 @@ async def process_wallet(wallet, session, chunk_manager):
             
     wallet_max_ts = last_ts
     wallet_max_hash = last_hash
+
 
     for row in (global_activities + market_activities):
         key = (
