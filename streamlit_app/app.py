@@ -315,28 +315,6 @@ def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
     """
     return run_query_to_pandas(query)@st.cache_data(ttl=300, show_spinner=False)
 
-def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
-    app_config = load_app_config()
-    escaped_condition_id = sql_string_literal(condition_id)
-    query = f"""
-        SELECT
-            t.trade_ts,
-            COALESCE(d.user_name, t.proxy_wallet) AS trader_identity,
-            t.trade_side,
-            t.outcome_name,
-            t.price,
-            t.size,
-            t.usdc_volume,
-            t.transaction_hash
-        FROM {app_config.fact_user_activity_trades_table} t
-        LEFT JOIN {app_config.dim_traders_table} d
-          ON t.proxy_wallet = d.proxy_wallet
-        WHERE t.condition_id = '{escaped_condition_id}'
-        ORDER BY t.trade_ts DESC
-        LIMIT {trade_limit}
-    """
-    return run_query_to_pandas(query)
-
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_today_for_timezone() -> date:
