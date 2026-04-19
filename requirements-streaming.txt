@@ -1,8 +1,8 @@
 # Dependencies for the streaming pipeline and anomaly detection.
 # Install with: pip install -r requirements-streaming.txt
 
-# Websocket client
-websockets>=12.0,<14.0
+# Websocket client — 13.x required for the websockets.asyncio.client API
+websockets>=13.0,<14.0
 
 # Kafka producer/consumer (librdkafka-backed, fast)
 confluent-kafka>=2.4
