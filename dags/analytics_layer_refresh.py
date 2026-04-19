@@ -10,6 +10,10 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowException
 
+DAGS_DIR = Path(__file__).resolve().parent
+if str(DAGS_DIR) not in sys.path:
+    sys.path.append(str(DAGS_DIR))
+
 from asset_defs import CURATED_GAMMA_MARKETS_ASSET, CURATED_USER_ACTIVITY_ASSET
 
 

@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+from pathlib import Path
+import sys
 from airflow import DAG
 from airflow.decorators import task
 from airflow.exceptions import AirflowException
@@ -7,6 +9,10 @@ from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 import os
 import glob #Glob is used to get parquet files from folder
 import shutil #shutil is used to move files across folders
+
+DAGS_DIR = Path(__file__).resolve().parent
+if str(DAGS_DIR) not in sys.path:
+    sys.path.append(str(DAGS_DIR))
 
 from asset_defs import CURATED_USER_ACTIVITY_ASSET
 
