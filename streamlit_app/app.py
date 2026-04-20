@@ -122,6 +122,7 @@ class AppConfig:
     trader_segment_snapshot_table: str
     trader_cohort_monthly_table: str
     market_theme_daily_table: str
+    leaderboard_users_table: str
     timezone: str
     default_market_limit: int
     default_trader_limit: int
@@ -273,6 +274,13 @@ def load_app_config() -> AppConfig:
             ),
             "app.market_theme_daily_table",
         ),
+        leaderboard_users_table=validate_identifier(
+            app_settings.get(
+                "leaderboard_users_table",
+                "COYOTE_DB.PUBLIC.LEADERBOARD_USERS",
+            ),
+            "app.leaderboard_users_table",
+        ),
         timezone=validate_timezone(app_settings.get("timezone", "America/Chicago")),
         default_market_limit=max(5, int(app_settings.get("default_market_limit", 10))),
         default_trader_limit=max(5, int(app_settings.get("default_trader_limit", 15))),
@@ -309,10 +317,22 @@ def get_session() -> Session:
 def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
     app_config = load_app_config()
     escaped_condition_id = sql_string_literal(condition_id)
+    
     query = f"""
+        WITH latest_usernames AS (
+            SELECT 
+                PROXYWALLET, 
+                USERNAME
+            FROM {app_config.leaderboard_users_table}
+            WHERE USERNAME IS NOT NULL AND USERNAME != ''
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY PROXYWALLET 
+                ORDER BY SNAPSHOT_DATE DESC, LOADED_AT DESC
+            ) = 1
+        )
         SELECT
             t.trade_ts,
-            COALESCE(d.user_name, t.proxy_wallet) AS trader_identity,
+            COALESCE(lu.USERNAME, d.user_name, t.proxy_wallet) AS trader_identity,
             t.trade_side,
             t.outcome_name,
             t.price,
@@ -322,6 +342,8 @@ def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
         FROM {app_config.fact_user_activity_trades_table} t
         LEFT JOIN {app_config.dim_traders_table} d
           ON t.proxy_wallet = d.proxy_wallet
+        LEFT JOIN latest_usernames lu
+          ON t.proxy_wallet = lu.PROXYWALLET
         WHERE t.condition_id = '{escaped_condition_id}'
         ORDER BY t.trade_ts DESC
         LIMIT {trade_limit}
@@ -332,14 +354,34 @@ def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
 def fetch_price_history(condition_id: str, row_limit: int = 5000) -> pd.DataFrame:
     app_config = load_app_config()
     escaped_condition_id = sql_string_literal(condition_id)
+    
     query = f"""
+        WITH latest_usernames AS (
+            SELECT 
+                PROXYWALLET, 
+                USERNAME
+            FROM {app_config.leaderboard_users_table}
+            WHERE USERNAME IS NOT NULL AND USERNAME != ''
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY PROXYWALLET 
+                ORDER BY SNAPSHOT_DATE DESC, LOADED_AT DESC
+            ) = 1
+        )
         SELECT
-            trade_ts,
-            outcome_name,
-            price
-        FROM {app_config.fact_user_activity_trades_table}
-        WHERE condition_id = '{escaped_condition_id}'
-        ORDER BY trade_ts ASC
+            t.trade_ts,
+            t.outcome_name,
+            t.price,
+            COALESCE(lu.USERNAME, d.user_name, t.proxy_wallet) AS trader_identity,
+            t.trade_side,
+            t.size AS trade_size,
+            t.usdc_volume
+        FROM {app_config.fact_user_activity_trades_table} t
+        LEFT JOIN {app_config.dim_traders_table} d
+          ON t.proxy_wallet = d.proxy_wallet
+        LEFT JOIN latest_usernames lu
+          ON t.proxy_wallet = lu.PROXYWALLET
+        WHERE t.condition_id = '{escaped_condition_id}'
+        ORDER BY t.trade_ts ASC
         LIMIT {row_limit}
     """
     return run_query_to_pandas(query)
@@ -449,25 +491,43 @@ def render_price_history_chart(df: pd.DataFrame) -> None:
     if df.empty:
         return
         
-    
     chart_df = df.sort_values("trade_ts")
 
-    chart = (
+    chart_tooltip = [
+        alt.Tooltip("trade_ts:T", title="Time", format="%Y-%m-%d %H:%M:%S"),
+        alt.Tooltip("trader_identity:N", title="Trader"),
+        alt.Tooltip("trade_side:N", title="Action"),
+        alt.Tooltip("outcome_name:N", title="Outcome"),
+        alt.Tooltip("price:Q", title="Price", format="$.4f"),
+        alt.Tooltip("trade_size:Q", title="Shares"),
+        alt.Tooltip("usdc_volume:Q", title="Volume")
+    ]
+
+    line_chart = (
         alt.Chart(chart_df)
         .mark_line(interpolate='step-after')
         .encode(
             x=alt.X("trade_ts:T", title="Time"),
-            y=alt.Y("price:Q", title="Price (USDC)", scale=alt.Scale(domain=[0, 1.3])),
+            y=alt.Y("price:Q", title="Price (USDC)", scale=alt.Scale(domain=[0, 1.05])),
             color=alt.Color("outcome_name:N", title="Outcome"),
-            tooltip=[
-                alt.Tooltip("trade_ts:T", title="Time", format="%Y-%m-%d %H:%M:%S"),
-                alt.Tooltip("outcome_name:N", title="Outcome"),
-                alt.Tooltip("price:Q", title="Price", format="$.4f")
-            ]
+            tooltip=chart_tooltip
         )
-        .interactive()
     )
-    st.altair_chart(chart, use_container_width=True)
+
+    point_chart = (
+        alt.Chart(chart_df)
+        .mark_circle(size=60, opacity=0.4)
+        .encode(
+            x=alt.X("trade_ts:T"),
+            y=alt.Y("price:Q"),
+            color=alt.Color("outcome_name:N"),
+            tooltip=chart_tooltip
+        )
+    )
+
+    final_chart = alt.layer(line_chart, point_chart).interactive()
+    
+    st.altair_chart(final_chart, width='stretch')
 
 
 def render_horizontal_bar_chart(
@@ -2597,7 +2657,7 @@ def render_data_analysis_page() -> None:
                 ),
             )
 
-        market_limit = min(app_config.default_market_limit, 25)
+        market_limit = min(app_config.default_market_limit, 200)
         trader_limit = min(app_config.default_trader_limit, 50)
         history_days = 60
         recent_trade_limit = 20
@@ -2607,7 +2667,7 @@ def render_data_analysis_page() -> None:
             market_limit = st.slider(
                 "Rows to show",
                 min_value=5,
-                max_value=25,
+                max_value=200,
                 value=market_limit,
                 step=1,
             )
