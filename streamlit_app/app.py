@@ -328,6 +328,22 @@ def fetch_trade_history(condition_id: str, trade_limit: int) -> pd.DataFrame:
     """
     return run_query_to_pandas(query)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_price_history(condition_id: str, row_limit: int = 5000) -> pd.DataFrame:
+    app_config = load_app_config()
+    escaped_condition_id = sql_string_literal(condition_id)
+    query = f"""
+        SELECT
+            trade_ts,
+            outcome_name,
+            price
+        FROM {app_config.fact_user_activity_trades_table}
+        WHERE condition_id = '{escaped_condition_id}'
+        ORDER BY trade_ts ASC
+        LIMIT {row_limit}
+    """
+    return run_query_to_pandas(query)
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_today_for_timezone() -> date:
@@ -428,6 +444,30 @@ def selected_row_or_default(
         st.session_state[state_key] = to_state_key(selected[key_column])
 
     return selected
+
+def render_price_history_chart(df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+        
+    
+    chart_df = df.sort_values("trade_ts")
+
+    chart = (
+        alt.Chart(chart_df)
+        .mark_line(interpolate='step-after')
+        .encode(
+            x=alt.X("trade_ts:T", title="Time"),
+            y=alt.Y("price:Q", title="Price (USDC)", scale=alt.Scale(domain=[0, 1.3])),
+            color=alt.Color("outcome_name:N", title="Outcome"),
+            tooltip=[
+                alt.Tooltip("trade_ts:T", title="Time", format="%Y-%m-%d %H:%M:%S"),
+                alt.Tooltip("outcome_name:N", title="Outcome"),
+                alt.Tooltip("price:Q", title="Price", format="$.4f")
+            ]
+        )
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def render_horizontal_bar_chart(
@@ -543,6 +583,32 @@ def render_cohort_heatmap(df: pd.DataFrame) -> None:
     )
     st.altair_chart(chart, width="stretch")
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_market_search(search_query: str, market_limit: int) -> pd.DataFrame:
+    app_config = load_app_config()
+    escaped_query = sql_string_literal(search_query.lower())
+    
+    
+    base_predicate = resolved_market_predicate()
+    
+    query = f"""
+        SELECT
+            market_id,
+            condition_id,
+            market_question,
+            market_label,
+            active,
+            closed,
+            end_date,
+            total_volume_usdc
+        FROM {app_config.highest_volume_markets_table}
+        WHERE {base_predicate}
+          AND (LOWER(market_label) LIKE '%{escaped_query}%' 
+               OR LOWER(market_question) LIKE '%{escaped_query}%')
+        ORDER BY total_volume_usdc DESC
+        LIMIT {market_limit}
+    """
+    return run_query_to_pandas(query)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_tracked_markets_for_day(selected_date: str, market_limit: int) -> pd.DataFrame:
@@ -2404,6 +2470,16 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
 
     markets_df = fetch_highest_volume_markets(market_limit, open_only=False)
 
+    search_term = st.text_input(
+        "Search markets by name or term", 
+        placeholder="e.g., Bitcoin, Election, Sports..."
+    )
+
+    if search_term.strip():
+        markets_df = fetch_market_search(search_term.strip(), market_limit)
+    else:
+        markets_df = fetch_highest_volume_markets(market_limit, open_only=False)
+
     if markets_df.empty:
         st.warning("No markets found to display.")
         return
@@ -2429,7 +2505,12 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
         return
 
     st.divider()
-    st.subheader(f"Recent Trades: {selected_market['market_label']}")
+    st.subheader(f"Market Analysis: {selected_market['market_label']}")
+
+    price_df = fetch_price_history(selected_market["condition_id"])
+    if not price_df.empty:
+        st.markdown("**Price History**")
+        render_price_history_chart(price_df)
 
     trades_df = fetch_trade_history(selected_market["condition_id"], trade_limit)
 
@@ -2437,7 +2518,6 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
         st.info("No trades found for this market in the activity table.")
         return
 
-    
     def color_side(val):
         if pd.isna(val):
             return ''
@@ -2446,6 +2526,7 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
 
     styled_df = trades_df.style.map(color_side, subset=['trade_side'])
 
+    st.markdown("**Recent Trades Ledger**")
     st.dataframe(
         styled_df,
         hide_index=True,
