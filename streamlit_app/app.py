@@ -516,7 +516,7 @@ def render_price_history_chart(df: pd.DataFrame) -> None:
 
     point_chart = (
         alt.Chart(chart_df)
-        .mark_circle(size=60, opacity=0.4)
+        .mark_circle(size=20, opacity=0.9)
         .encode(
             x=alt.X("trade_ts:T"),
             y=alt.Y("price:Q"),
@@ -529,6 +529,56 @@ def render_price_history_chart(df: pd.DataFrame) -> None:
     
     st.altair_chart(final_chart, width='stretch')
 
+def render_isolated_user_chart(market_df: pd.DataFrame, user_df: pd.DataFrame) -> None:
+    if market_df.empty:
+        return
+        
+    market_chart_df = market_df.sort_values("trade_ts")
+    
+    chart_tooltip = [
+        alt.Tooltip("trade_ts:T", title="Time", format="%Y-%m-%d %H:%M:%S"),
+        alt.Tooltip("trader_identity:N", title="Trader"),
+        alt.Tooltip("trade_side:N", title="Action"),
+        alt.Tooltip("outcome_name:N", title="Outcome"),
+        alt.Tooltip("price:Q", title="Price", format="$.4f"),
+        alt.Tooltip("trade_size:Q", title="Shares"),
+        alt.Tooltip("usdc_volume:Q", title="Volume")
+    ]
+
+    
+    line_chart = (
+        alt.Chart(market_chart_df)
+        .mark_line(interpolate='step-after', opacity=0.25, strokeWidth=1)
+        .encode(
+            x=alt.X("trade_ts:T", title="Time"),
+            y=alt.Y("price:Q", title="Price (USDC)", scale=alt.Scale(domain=[0, 1.05])),
+            color=alt.Color("outcome_name:N", title="Outcome", legend=None),
+            tooltip=[
+                alt.Tooltip("trade_ts:T", title="Time", format="%Y-%m-%d %H:%M:%S"),
+                alt.Tooltip("outcome_name:N", title="Outcome"),
+                alt.Tooltip("price:Q", title="Price", format="$.4f")
+            ]
+        )
+    )
+
+    if not user_df.empty:
+        user_chart_df = user_df.sort_values("trade_ts")
+        
+        point_chart = (
+            alt.Chart(user_chart_df)
+            .mark_circle(size=60, opacity=0.9, stroke='white', strokeWidth=1)
+            .encode(
+                x=alt.X("trade_ts:T"),
+                y=alt.Y("price:Q"),
+                color=alt.Color("outcome_name:N", title="Outcome"),
+                tooltip=chart_tooltip
+            )
+        )
+        final_chart = alt.layer(line_chart, point_chart).interactive()
+    else:
+        final_chart = line_chart.interactive()
+        
+    st.altair_chart(final_chart, width='stretch')
 
 def render_horizontal_bar_chart(
     df: pd.DataFrame,
@@ -642,6 +692,45 @@ def render_cohort_heatmap(df: pd.DataFrame) -> None:
         )
     )
     st.altair_chart(chart, width="stretch")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_isolated_trader_market_history(condition_id: str, trader_identity: str, row_limit: int = 5000) -> pd.DataFrame:
+    app_config = load_app_config()
+    escaped_condition_id = sql_string_literal(condition_id)
+    escaped_identity = sql_string_literal(trader_identity)
+    
+    query = f"""
+        WITH latest_usernames AS (
+            SELECT 
+                PROXYWALLET, 
+                USERNAME
+            FROM {app_config.leaderboard_users_table}
+            WHERE USERNAME IS NOT NULL AND USERNAME != ''
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY PROXYWALLET 
+                ORDER BY SNAPSHOT_DATE DESC, LOADED_AT DESC
+            ) = 1
+        )
+        SELECT
+            t.trade_ts,
+            t.outcome_name,
+            t.price,
+            COALESCE(lu.USERNAME, d.user_name, t.proxy_wallet) AS trader_identity,
+            t.trade_side,
+            t.size AS trade_size,
+            t.usdc_volume,
+            t.transaction_hash
+        FROM {app_config.fact_user_activity_trades_table} t
+        LEFT JOIN {app_config.dim_traders_table} d
+          ON t.proxy_wallet = d.proxy_wallet
+        LEFT JOIN latest_usernames lu
+          ON t.proxy_wallet = lu.PROXYWALLET
+        WHERE t.condition_id = '{escaped_condition_id}'
+          AND COALESCE(lu.USERNAME, d.user_name, t.proxy_wallet) = '{escaped_identity}'
+        ORDER BY t.trade_ts DESC
+        LIMIT {row_limit}
+    """
+    return run_query_to_pandas(query)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_market_search(search_query: str, market_limit: int) -> pd.DataFrame:
@@ -2602,6 +2691,49 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
             "transaction_hash": st.column_config.TextColumn("Tx Hash"),
         }
     )
+
+    st.divider()
+    st.subheader("Isolate Trader Activity")
+    st.caption("See exactly when a specific user traded within the context of the market's overall price movement.")
+
+    if not price_df.empty:
+        
+        unique_traders = sorted(price_df["trader_identity"].dropna().unique().tolist())
+        
+        selected_trader = st.selectbox(
+            "Select a trader to isolate",
+            options=[""] + unique_traders,
+            format_func=lambda x: "Select a trader..." if x == "" else x
+        )
+
+        if selected_trader:
+           
+            user_trades_df = fetch_isolated_trader_market_history(selected_market["condition_id"], selected_trader, row_limit=5000)
+            
+            st.markdown(f"**Execution History: `{selected_trader}`**")
+            render_isolated_user_chart(price_df, user_trades_df)
+
+            if not user_trades_df.empty:
+                st.markdown(f"**Isolated Trades Ledger: `{selected_trader}`**")
+                
+                styled_user_df = user_trades_df.style.map(color_side, subset=['trade_side'])
+                st.dataframe(
+                    styled_user_df,
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "trade_ts": st.column_config.DatetimeColumn("Time"),
+                        "trader_identity": st.column_config.TextColumn("Trader"),
+                        "trade_side": st.column_config.TextColumn("Side"),
+                        "outcome_name": st.column_config.TextColumn("Outcome"),
+                        "price": st.column_config.NumberColumn("Price", format="%.4f"),
+                        "trade_size": st.column_config.NumberColumn("Shares", format="%.2f"),
+                        "usdc_volume": st.column_config.NumberColumn("Total Value", format="$%.2f"),
+                        "transaction_hash": st.column_config.TextColumn("Tx Hash"),
+                    }
+                )
+            else:
+                st.info("No recent executions found for this user.")
 
 def render_data_analysis_page() -> None:
     st.title("Polymetrics")
