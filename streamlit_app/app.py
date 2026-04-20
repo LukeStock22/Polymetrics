@@ -2617,8 +2617,6 @@ def render_trader_profile_lookup(
 def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
     st.subheader(QUESTION_TRADE_HISTORY)
 
-    markets_df = fetch_highest_volume_markets(market_limit, open_only=False)
-
     search_term = st.text_input(
         "Search markets by name or term", 
         placeholder="e.g., Bitcoin, Election, Sports..."
@@ -2663,41 +2661,39 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
 
     trades_df = fetch_trade_history(selected_market["condition_id"], trade_limit)
 
-    if trades_df.empty:
-        st.info("No trades found for this market in the activity table.")
-        return
-
     def color_side(val):
         if pd.isna(val):
             return ''
         color = 'rgba(39, 201, 115, 0.2)' if str(val).upper() == 'BUY' else 'rgba(255, 104, 113, 0.2)'
         return f'background-color: {color}'
 
-    styled_df = trades_df.style.map(color_side, subset=['trade_side'])
+    if not trades_df.empty:
+        styled_df = trades_df.style.map(color_side, subset=['trade_side'])
+        st.markdown("**Recent Trades Ledger**")
+        st.dataframe(
+            styled_df,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "trade_ts": st.column_config.DatetimeColumn("Time"),
+                "trader_identity": st.column_config.TextColumn("Trader"),
+                "trade_side": st.column_config.TextColumn("Side"),
+                "outcome_name": st.column_config.TextColumn("Outcome"),
+                "price": st.column_config.NumberColumn("Price", format="%.4f"),
+                "size": st.column_config.NumberColumn("Shares", format="%.2f"),
+                "usdc_volume": st.column_config.NumberColumn("Total Value", format="$%.2f"),
+                "transaction_hash": st.column_config.TextColumn("Tx Hash"),
+            }
+        )
+    else:
+        st.info("No trades found for this market in the activity table.")
 
-    st.markdown("**Recent Trades Ledger**")
-    st.dataframe(
-        styled_df,
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "trade_ts": st.column_config.DatetimeColumn("Time"),
-            "trader_identity": st.column_config.TextColumn("Trader"),
-            "trade_side": st.column_config.TextColumn("Side"),
-            "outcome_name": st.column_config.TextColumn("Outcome"),
-            "price": st.column_config.NumberColumn("Price", format="%.4f"),
-            "size": st.column_config.NumberColumn("Shares", format="%.2f"),
-            "usdc_volume": st.column_config.NumberColumn("Total Value", format="$%.2f"),
-            "transaction_hash": st.column_config.TextColumn("Tx Hash"),
-        }
-    )
-
+    # --- Isolated Trader Section ---
     st.divider()
     st.subheader("Isolate Trader Activity")
-    st.caption("See exactly when a specific user traded within the context of the market's overall price movement.")
+    st.caption("See exactly when a specific user traded within the context of the market's overall price movement, along with their estimated PnL.")
 
     if not price_df.empty:
-        
         unique_traders = sorted(price_df["trader_identity"].dropna().unique().tolist())
         
         selected_trader = st.selectbox(
@@ -2707,16 +2703,53 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
         )
 
         if selected_trader:
-           
             user_trades_df = fetch_isolated_trader_market_history(selected_market["condition_id"], selected_trader, row_limit=5000)
             
-            st.markdown(f"**Execution History: `{selected_trader}`**")
-            render_isolated_user_chart(price_df, user_trades_df)
-
             if not user_trades_df.empty:
-                st.markdown(f"**Isolated Trades Ledger: `{selected_trader}`**")
+                # --- PnL Calculation Logic ---
+                # Get the last known price for each outcome in this market to value current holdings
+                latest_prices = price_df.sort_values("trade_ts").groupby("outcome_name")["price"].last().to_dict()
+                
+                total_spent = 0.0
+                total_received = 0.0
+                position_value = 0.0
+                
+                for outcome in user_trades_df["outcome_name"].unique():
+                    outcome_trades = user_trades_df[user_trades_df["outcome_name"] == outcome]
+                    
+                    buys = outcome_trades[outcome_trades["trade_side"].str.upper() == "BUY"]
+                    sells = outcome_trades[outcome_trades["trade_side"].str.upper() == "SELL"]
+                    
+                    shares_bought = buys["trade_size"].sum()
+                    shares_sold = sells["trade_size"].sum()
+                    
+                    usdc_spent = buys["usdc_volume"].sum()
+                    usdc_received = sells["usdc_volume"].sum()
+                    
+                    current_position = max(0, shares_bought - shares_sold)
+                    latest_price = latest_prices.get(outcome, 0.0)
+                    
+                    total_spent += usdc_spent
+                    total_received += usdc_received
+                    position_value += (current_position * latest_price)
+                    
+                net_pnl = (total_received + position_value) - total_spent
+                
+                # --- Render Metrics & Chart ---
+                st.markdown(f"**Execution History: `{selected_trader}`**")
+                
+                pnl_col1, pnl_col2, pnl_col3, pnl_col4 = st.columns(4)
+                pnl_col1.metric("Total Spent", f"${total_spent:,.2f}")
+                pnl_col2.metric("Total Received", f"${total_received:,.2f}")
+                pnl_col3.metric("Est. Position Value", f"${position_value:,.2f}")
+                pnl_col4.metric("Estimated Net PnL", f"${net_pnl:,.2f}", delta=round(net_pnl, 2))
+                
+                render_isolated_user_chart(price_df, user_trades_df)
+
+                st.markdown(f"**Isolated Trades Ledger: `{selected_trader}`** ({len(user_trades_df)} trades)")
                 
                 styled_user_df = user_trades_df.style.map(color_side, subset=['trade_side'])
+                
                 st.dataframe(
                     styled_user_df,
                     hide_index=True,
