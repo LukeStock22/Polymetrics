@@ -934,8 +934,25 @@ def format_timestamp(value) -> str:
     if pd.isna(value):
         return "N/A"
     if hasattr(value, "strftime"):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
+        return value.strftime("%Y-%m-%d %H:%M")
     return str(value)
+
+
+def render_timestamp_metric(column, label: str, value) -> None:
+    formatted = format_timestamp(value)
+    column.markdown(
+        f"""
+        <div style="padding-top: 0.25rem;">
+          <div style="font-size: 0.95rem; color: rgba(250, 250, 250, 0.95); margin-bottom: 0.4rem;">
+            {label}
+          </div>
+          <div style="font-size: 1.7rem; font-weight: 600; line-height: 1.2; word-break: break-word;">
+            {formatted}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def build_base_table_specs() -> list[dict[str, str]]:
@@ -1366,11 +1383,10 @@ def render_table_details(selected: pd.Series, include_summary_stats: bool) -> No
         "Size (GB)",
         f"{float(selected['size_gb']):,.4f}" if pd.notna(selected["size_gb"]) else "N/A",
     )
-    metric_col_3.metric(
+    render_timestamp_metric(
+        metric_col_3,
         "Latest row timestamp" if include_summary_stats else "Last updated",
-        format_timestamp(
-            selected["latest_row_timestamp"] if include_summary_stats else selected["last_altered"]
-        ),
+        selected["latest_row_timestamp"] if include_summary_stats else selected["last_altered"],
     )
 
     columns_df = fetch_table_columns(full_name)
@@ -1515,9 +1531,10 @@ def main() -> None:
                 "Total size (GB)",
                 f"{float(analytics_tables_df['size_gb'].fillna(0).sum()):,.4f}",
             )
-            metric_col_4.metric(
+            render_timestamp_metric(
+                metric_col_4,
                 "Most recent row timestamp",
-                format_timestamp(analytics_tables_df["latest_row_timestamp"].max()),
+                analytics_tables_df["latest_row_timestamp"].max(),
             )
 
         analytics_selection = st.dataframe(
