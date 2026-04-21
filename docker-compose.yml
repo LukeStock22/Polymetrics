@@ -59,7 +59,10 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
 
   flink-jobmanager:
-    image: flink:1.20-scala_2.12-java17
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.flink
+    image: polymetrics/flink-pyflink:1.20.1
     restart: unless-stopped
     command: jobmanager
     ports:
@@ -76,7 +79,10 @@ services:
       - ${HOME}/.snowflake_keys:/root/.snowflake_keys:ro
 
   flink-taskmanager:
-    image: flink:1.20-scala_2.12-java17
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.flink
+    image: polymetrics/flink-pyflink:1.20.1
     restart: unless-stopped
     depends_on:
       - flink-jobmanager
