@@ -674,12 +674,28 @@ def render_grouped_metric_chart(
 
 
 def render_cohort_heatmap(df: pd.DataFrame) -> None:
+    start_date = pd.Timestamp("2022-01-01")
+    end_date = pd.Timestamp("2026-12-31")
+    chart_df = df[
+        df["cohort_month"].between(start_date, end_date, inclusive="both")
+    ].copy()
+
+    if chart_df.empty:
+        st.info("No cohort rows were found between 2022 and 2026.")
+        return
+
     chart = (
-        alt.Chart(df)
+        alt.Chart(chart_df)
         .mark_rect()
         .encode(
             x=alt.X("months_since_first_seen:O", title="Months since first trade"),
-            y=alt.Y("cohort_month:T", title="Cohort month"),
+            y=alt.Y(
+                "cohort_month:T",
+                title="Cohort month",
+                scale=alt.Scale(
+                    domain=[start_date.to_pydatetime(), end_date.to_pydatetime()]
+                ),
+            ),
             color=alt.Color("active_traders:Q", title="Active traders"),
             tooltip=[
                 alt.Tooltip("cohort_month:T", title="Cohort month"),
