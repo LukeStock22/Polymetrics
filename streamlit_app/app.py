@@ -471,7 +471,7 @@ def selected_row_or_default(
 
     selected = None
     selected_rows = selection.selection.rows
-    if selected_rows:
+    if selected_rows and selected_rows[0] < len(df):
         selected = df.iloc[selected_rows[0]]
         st.session_state[state_key] = to_state_key(selected[key_column])
     elif state_key in st.session_state:
@@ -525,7 +525,7 @@ def render_price_history_chart(df: pd.DataFrame) -> None:
         )
     )
 
-    final_chart = alt.layer(line_chart, point_chart).interactive()
+    final_chart = alt.layer(line_chart, point_chart).interactive(bind_y=False)
     
     st.altair_chart(final_chart, width='stretch')
 
@@ -548,7 +548,7 @@ def render_isolated_user_chart(market_df: pd.DataFrame, user_df: pd.DataFrame) -
     
     line_chart = (
         alt.Chart(market_chart_df)
-        .mark_line(interpolate='step-after', opacity=0.25, strokeWidth=1)
+        .mark_line(interpolate='step-after', opacity=0.3, strokeWidth=2)
         .encode(
             x=alt.X("trade_ts:T", title="Time"),
             y=alt.Y("price:Q", title="Price (USDC)", scale=alt.Scale(domain=[0, 1.05])),
@@ -566,7 +566,7 @@ def render_isolated_user_chart(market_df: pd.DataFrame, user_df: pd.DataFrame) -
         
         point_chart = (
             alt.Chart(user_chart_df)
-            .mark_circle(size=60, opacity=0.9, stroke='white', strokeWidth=1)
+            .mark_circle(size=40, opacity=0.8, stroke='white', strokeWidth=0.5)
             .encode(
                 x=alt.X("trade_ts:T"),
                 y=alt.Y("price:Q"),
@@ -574,9 +574,9 @@ def render_isolated_user_chart(market_df: pd.DataFrame, user_df: pd.DataFrame) -
                 tooltip=chart_tooltip
             )
         )
-        final_chart = alt.layer(line_chart, point_chart).interactive()
+        final_chart = alt.layer(line_chart, point_chart).interactive(bind_y=False)
     else:
-        final_chart = line_chart.interactive()
+        final_chart = line_chart.interactive(bind_y=False)
         
     st.altair_chart(final_chart, width='stretch')
 
@@ -2722,10 +2722,10 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
             user_trades_df = fetch_isolated_trader_market_history(selected_market["condition_id"], selected_trader, row_limit=5000)
             
             if not user_trades_df.empty:
-                # --- PnL Calculation Logic ---
-                # Get the last known price for each outcome in this market to value current holdings
                 latest_prices = price_df.sort_values("trade_ts").groupby("outcome_name")["price"].last().to_dict()
-                
+                is_closed = bool(selected_market.get("closed", False))
+                winning_outcome = max(latest_prices, key=latest_prices.get) if (is_closed and latest_prices) else None
+
                 total_spent = 0.0
                 total_received = 0.0
                 position_value = 0.0
@@ -2743,8 +2743,12 @@ def render_trade_history_question(market_limit: int, trade_limit: int) -> None:
                     usdc_received = sells["usdc_volume"].sum()
                     
                     current_position = max(0, shares_bought - shares_sold)
-                    latest_price = latest_prices.get(outcome, 0.0)
-                    
+
+                    if is_closed:
+                        latest_price = 1.0 if outcome == winning_outcome else 0.0
+                    else:
+                        latest_price = latest_prices.get(outcome, 0.0)
+
                     total_spent += usdc_spent
                     total_received += usdc_received
                     position_value += (current_position * latest_price)
