@@ -1337,8 +1337,8 @@ def fetch_table_summary_stats(full_name: str) -> tuple[pd.DataFrame, pd.DataFram
             {
                 "column_name": column,
                 "non_null_count": summary_row.get(f"{alias}__non_null"),
-                "min": summary_row.get(f"{alias}__min"),
-                "max": summary_row.get(f"{alias}__max"),
+                "min": format_timestamp(summary_row.get(f"{alias}__min")),
+                "max": format_timestamp(summary_row.get(f"{alias}__max")),
             }
         )
 
