@@ -15,28 +15,11 @@
 
 = Abstract
 
-This report should open with a compact summary of the full PolyMetrics system and the main technical story of the paper.
-
-- Explain the project goal: build a warehouse-backed analytics platform for Polymarket market metadata, user activity, and live order flow.
-- Summarize the end-to-end architecture: batch ingestion into Snowflake, streaming ingestion for live data, an analytics layer for reusable marts, and a Streamlit application for presentation.
-- Preview the main technical contributions highlighted in this paper: the Gamma market DAGs, the cross-database analytics layer, and the Streamlit interface.
-- End with the main takeaway or result you want the reader to remember.
 
 = Problem and Motivation
 
-This section should motivate the project at the system level before narrowing into the parts of the architecture that you implemented.
-
-== Why Polymarket is a strong data systems problem
-
-- Polymarket combines market metadata, user transaction activity, and live order flow, which makes it a good fit for a data management at scale project.
-- The proposal already gives strong motivation points to reuse here: large numbers of markets and users, the need to combine historical and live data, and the difficulty of organizing the platform into a clean relational model.
-- Explain the kinds of questions the project is meant to answer, such as market popularity, trader behavior, market concentration, and anomaly detection.
-
-== Project scope and architecture
-
 
 = Data Sources
-
 
 
 == Gamma REST API
@@ -46,30 +29,27 @@ For each market, Gamma returns market and condition IDs, question text, slug, st
 
 Gamma is fully public and read-only. No authentication, API key, or wallet is required to call Gamma endpoints, so any public user can access it for research, dashboards, or analytics. 
 
-Rate limiting does exist and is enforced through Cloudflare throttling on sliding windows. Gamma has a general limit of `4,000` requests per `10` seconds, with stricter per-endpoint limits such as `300` requests per `10` seconds for `/markets` and `500` requests per `10` seconds for `/events`. These are fairly simple to circumvent by being conservative and fetching sequentially with a brief sleep in between calls and retry logic.
+Rate limiting does exist and is enforced through Cloudflare throttling on sliding windows. Gamma has a general limit of `4,000` requests per `10` seconds, with stricter per-endpoint limits such as `300` requests per `10` seconds for `/markets` and `500` requests per `10` seconds for `/events`. These are fairly simple to circumvent by being conservative with fetching sequentially with a brief sleep in between calls and retry logic.
 
 == Polymarket Data API and bulk user activity
 
-- Describe the Polymarket data endpoints used elsewhere in the system, especially the trade and leaderboard data that land in `DOG_DB`.
-- Explain that curated user activity in `COYOTE_DB.PUBLIC.CURATED_POLYMARKET_USER_ACTIVITY` is the authoritative transaction source for warehouse analytics.
-- Clarify the source-of-truth split: `PANTHER` for markets, `COYOTE` for user transactions, `DOG` for streaming and supplemental feeds.
 
 == Live CLOB websocket feed
 
-- Introduce the websocket feed as the source for real-time order flow and book updates.
-- Explain why live streaming is necessary for anomaly detection and why it complements, rather than replaces, the batch warehouse pipeline.
+
 
 = Data Batch Ingestion and Snowflake Storage
 
-== Gamma market ingestion DAGs
+This is the first section where your own implementation should take center stage.
 
+== Gamma market ingestion DAGs
 We have two separate DAGs that are capable of ingesting data from the Gamma API into Snowflake. `gamma_markets_daily` is the ongoing scheduled ingestion job that runs hourly to keep the market dimension current and keep data fresh for downstream analytics and the Streamlit app. `gamma_markets_catchup` is a manually triggered recovery and backfill DAG that reconciles history from the current watermark forward, or from the beginning of available history when run in full-history mode. This split keeps the regular functioning path simple while still giving the project a reliable way to manually recover from missed runs, bootstrap a fresh environment, or backfill after a schema change without creating one oversized DAG.
 
 The `gamma_markets_catchup` DAG was used to fetch all historical market data in bulk initially, and is now only used to manually catch up if the hourly scheduled DAG misses several runs (my Linuxlab isn't running constantly) or for backfilling if the schema of the data we are collecting changes. We do not have intentions of continually running the `gamma_markets_catchup` on any regular interval or schedule unless missed data proves to be an issue. The `gamma_markets_daily` DAG does not automatically trust that the last hourly run completed successfully, it still determines how far back to check for updates based on a watermark. Hence, occasionally skipped runs of `gamma_markets_daily` do not automatically caused missed data.
 
-Both DAGs follow the same core data flow. They first ensure that the required Snowflake objects exist, then fetch market pages from the Gamma API for two source groups: active markets and recently closed markets within the requested window. Those JSON page files are written to disk, uploaded into the internal Snowflake stage `PANTHER_DB.RAW.GAMMA_MARKETS_STAGE`, and then loaded into the scratch table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES_STAGE`, where they become queryable rows with payload and file metadata. From there, the pipeline merges the data into the raw history table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES` and finally upserts the latest known version of each market into `PANTHER_DB.CURATED.GAMMA_MARKETS`. This design is intentionally idempotent: rerunning a load does not blindly duplicate data, because the scratch table is reused each run and both the raw and curated layers are maintained through merge-based upserts and duplicate checks. In the daily DAG, the curated publication step also emits the `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS` Airflow dataset event, which allows the downstream analytics DAG to refresh only after curated market data has been successfully published.
+Both DAGs follow the same core data flow. They first ensure that the required Snowflake objects exist, then fetch market pages from the Gamma API for two source groups: active markets and recently closed markets within the requested window. Those JSON page files are written to disk, uploaded into the internal Snowflake stage `PANTHER_DB.RAW.GAMMA_MARKETS_STAGE`, and then loaded into the scratch table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES_STAGE`. Then the pipeline merges the data into the raw history table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES` and finally upserts the latest known version of each market into `PANTHER_DB.CURATED.GAMMA_MARKETS`. This design is intentionally idempotent. Rerunning a load does not blindly duplicate data, because the scratch table is reused each run and both the raw and curated layers are maintained through merge-based upserts and duplicate checks. In the hourly DAG, the curated publication step also emits the `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS` Airflow dataset event, which allows the downstream analytics DAG to refresh after curated market data has been successfully published.
 
-The main difference between the two DAGs is how they define the ingestion window. `gamma_markets_daily` uses the Airflow data interval when available, but it also consults the latest `updated_at` watermark in the curated table so that manual runs still behave sensibly. `gamma_markets_catchup` instead computes a larger reconciliation window from the current warehouse watermark through the start of the current day, which makes it appropriate for initial loads and missed-history recovery. In both cases, the workflow is designed to avoid rescanning the entire closed-market universe on every run. Instead, it targets active markets plus a bounded slice of recently ended markets, which is a much more practical strategy for a public API with pagination and rate limits.
+The main difference between the two DAGs is how they define the ingestion window. `gamma_markets_daily` is watermark-driven. Its lower bound is usually `MAX(updated_at)` from `PANTHER_DB.CURATED.GAMMA_MARKETS`, where `updated_at` is Polymarket's own `updatedAt` value copied from the API payload (not the time we inserted the row into Snowflake or the time of the last successful Airflow run). Its upper bound is the Airflow interval end for scheduled runs or `now` for manual runs. `gamma_markets_catchup` uses the same Polymarket `updatedAt` watermark as its lower bound unless full-history mode is requested, but its upper bound is the start of the current day, so it reconciles everything from the warehouse watermark through yesterday rather than just one recent interval. In both DAGs, active markets are always fetched and closed markets are only fetched for the selected window, which avoids re-scanning the entire closed-market history on every run. This improves efficiency through preventing unnecessary fetches.
 
 The figures below summarize the task dependencies in both DAGs and the shared raw-to-curated data path they use inside `PANTHER_DB`.
 
@@ -424,38 +404,17 @@ The figures below summarize the task dependencies in both DAGs and the shared ra
   caption: [Shared raw-to-curated data path used by both Gamma ingestion DAGs inside `PANTHER_DB`. The pipeline preserves raw page history before materializing the latest known market record in the curated table.]
 )
 
-Data quality checks are built directly into the DAG flow rather than treated as an afterthought. The daily DAG verifies that the stage table is populated, checks for duplicate rows in both the raw and curated layers, and confirms that the newest `updated_at` value in the curated table is at least as recent as the start of the requested window. The catchup DAG performs similar duplicate checks and validates that the curated table is fresh through the prior day after a recovery run completes. Together, these checks give the ingestion layer a concrete correctness story: the pipeline is not just moving JSON into Snowflake, it is validating freshness, preserving history, and maintaining a clean latest-state market table for downstream use.
+Basic data quality checks are built directly into the DAG flow rather than treated as an afterthought. The daily DAG verifies that the stage table is populated, checks for duplicate rows in both the raw and curated layers, and confirms that the newest `updated_at` value in the curated table is at least as recent as the start of the requested window. The catchup DAG performs similar duplicate checks and validates that the curated table is fresh through the prior day after a recovery run completes. Together, these checks ensure we aren't just moving JSON into Snowflake but also preserve freshness, avoid duplicates, and maintain a clean market table that maintains the latest state for downstream use.
 
 == Snowflake table design
+The Snowflake design is split into a scratch load table, a persistent raw history table, and a curated latest-state table. `PANTHER_DB.RAW.GAMMA_MARKET_PAGES_STAGE` is the staging table used during each load after the JSON files are uploaded into the internal Snowflake stage. It is truncated and reused each run. `PANTHER_DB.RAW.GAMMA_MARKET_PAGES` is the persistent raw history table. It stores one row per uploaded JSON page version and keeps the full API payload as a `VARIANT`, which matters because Gamma data can change over time and reruns or backfills should not destroy the record of what the API returned.
 
-The Snowflake design mirrors a standard raw-to-curated warehouse pattern. `PANTHER_DB.RAW.GAMMA_MARKET_PAGES_STAGE` is a scratch table used during each load, while `PANTHER_DB.RAW.GAMMA_MARKET_PAGES` stores one row per uploaded JSON page version and preserves the full API payload as a `VARIANT`. This raw history matters because the Gamma API is operational data, not a static exported dataset. Markets can change over time, nested structures can evolve, and failed or repeated runs should not destroy the historical audit trail of what was observed at ingestion time.
+`PANTHER_DB.CURATED.GAMMA_MARKETS` serves a different purpose. It keeps the newest known version of each market keyed by `market_id`, using Polymarket's `updatedAt` value and then `raw_loaded_at` to decide which record is the latest. It also exposes the most important top-level fields as typed columns for analytics while still preserving the original `market_payload`. This gives the rest of the project a market table that is easy to query without losing access to the full source record. `PANTHER_DB.CURATED.GAMMA_MARKETS` is the market dimension for downstream use.
 
-The curated target, `PANTHER_DB.CURATED.GAMMA_MARKETS`, serves a different purpose. It keeps the newest known version of each market keyed by `market_id`, selects the latest record using `updatedAt` and `raw_loaded_at`, and exposes the most important top-level fields as typed columns for analytics. At the same time, it still retains the original `market_payload`, which means the project gets both performance and fidelity: analysts can query typed columns such as labels, liquidity, dates, and volumes directly, but the full source record is still available when a field has not yet been modeled explicitly.
-
-This design choice was especially important for the rest of the project because `PANTHER_DB.CURATED.GAMMA_MARKETS` becomes the canonical market dimension feeding both the analytics layer and the streaming selector logic. The warehouse does not need to repeatedly parse raw JSON inside application code, and downstream models can treat the curated table as the authoritative latest-state representation of Polymarket market metadata.
-
-== Operational challenges and design choices
-
-One of the main operational challenges with Gamma ingestion was that a public REST API is convenient but not perfectly predictable under sustained batch access. The project documentation records cases where the Gamma API returned `403 Forbidden`, which required the fetcher to be hardened with a user agent, retries, backoff, and timeouts. That experience reinforced a broader design lesson: even when an API is officially public and easy to call, a reliable ingestion system still needs defensive behavior around networking, pagination, and partial failure.
-
-Another challenge was selecting an ingestion window that was correct without being wasteful. A naive solution would have repeatedly scanned all markets, including the entire closed-market history, every time the DAG ran. Instead, the implemented design combines the current curated watermark with bounded time windows for closed markets and a separate active-market pull. This substantially reduces unnecessary work while still keeping the market dimension current. On the Airflow side, `max_active_runs=1` and shared ingestion logic across the two DAGs help keep runs reproducible and reduce the risk of overlapping writes.
-
-The figures in this section make clear that the Gamma pipeline is not just a set of API calls. It is a warehouse ingestion design with explicit task dependencies, raw history preservation, curated latest-state materialization, and post-load data-quality validation.
 
 = Data Streaming Ingestion
 
-This section provides system context for the full project and gives the reader the real-time half of the architecture story.
 
-== Streaming pipeline overview
-
-- Summarize the path from the Polymarket CLOB websocket to Kafka, then to PyFlink and Snowflake in `DOG_DB`.
-- Explain the role of the streaming layer in capturing live trades, order book snapshots, and anomaly events.
-
-== Relationship to the batch and analytics layers
-
-- Explain how the streaming system complements the warehouse rather than replacing it.
-- Note that `DOG_DB` also provides supplemental raw and derived tables that can later enrich the warehouse analytics layer.
-- Keep this section concise relative to the Gamma, analytics, and Streamlit sections unless you want to spend more time documenting end-to-end system context.
 
 = Analytics Layer
 
@@ -523,14 +482,10 @@ For the final paper, this section should include screenshots that illustrate bot
 
 The key visualization argument is that the app is valuable because it makes modeled warehouse data explorable. The visuals are therefore most persuasive when paired with a short explanation of which analytics table is powering each screen. That connection between interface and warehouse design is one of the strongest themes running through the entire project.
 
+
+
 = Conclusion
 
-- Summarize the full system in a few sentences.
-- Re-state the most important technical contributions of the paper, especially the Gamma ingestion pipeline, the warehouse analytics layer, and the Streamlit application.
-- End with the strongest big-picture claim you can defend about the project: what the platform now makes possible that was difficult or impossible before.
+
 
 = Future Work
-
-- Mention realistic next steps, not just idealized ones.
-- Strong candidates from the current repo include deeper use of `DOG_DB` derived tables, broader anomaly integration into the analytics layer, more robust Snowflake-native orchestration, stronger testing/monitoring, and additional Streamlit pages or richer visualizations.
-- You can also note where the project would benefit from production hardening, more historical benchmarking, or more formal performance evaluation.
