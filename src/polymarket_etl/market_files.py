@@ -25,6 +25,8 @@ class MarketPageFile:
 
     @property
     def is_active(self) -> Optional[bool]:
+        if self.page_name.startswith("active_"):
+            return True
         if "active_true" in self.page_name:
             return True
         if "active_false" in self.page_name:

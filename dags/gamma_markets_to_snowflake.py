@@ -116,7 +116,9 @@ def put_files_to_stage(files: Iterable[Path]) -> None:
 def gamma_markets_to_snowflake():
     @task()
     def inspect_local_market_files() -> dict:
-        files = discover_market_page_files(MARKETS_DATA_DIR)
+        files = discover_market_page_files(
+            MARKETS_DATA_DIR, include_content_metrics=True
+        )
         summary = summarize_market_page_files(files)
         if not files:
             raise AirflowException(f"No files found in {MARKETS_DATA_DIR}")
@@ -146,7 +148,6 @@ def gamma_markets_to_snowflake():
             raise AirflowException("No files were uploaded to Snowflake stage")
 
         hook = get_snowflake_hook()
-        discover_market_page_files(MARKETS_DATA_DIR, include_content_metrics=False)
         manifest_sql = build_manifest_rows_sql(file_names)
         statements = [
             truncate_stage_table_sql(SNOWFLAKE_DATABASE),

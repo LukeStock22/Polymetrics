@@ -918,8 +918,8 @@ def quote_identifier(name: str) -> str:
 
 
 def parse_fq_name(full_name: str) -> tuple[str, str, str]:
-    parts = full_name.split(".")
-    if len(parts) != 3:
+    parts = [part.strip() for part in full_name.strip().split(".")]
+    if len(parts) != 3 or any(not part for part in parts):
         raise ValueError(f"Expected DATABASE.SCHEMA.TABLE, got {full_name!r}")
     return parts[0], parts[1], parts[2]
 
