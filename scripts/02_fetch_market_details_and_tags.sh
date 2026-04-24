@@ -6,7 +6,7 @@ OVERWRITE="${OVERWRITE:-0}"   # set to 1 to re-fetch everything
 
 mkdir -p data/raw/gamma/market_details data/raw/gamma/market_tags
 
-if [[ ! -f data/market_ids.txt ]]; then
+if [[ ! -s data/market_ids.txt ]]; then
   echo "Missing data/market_ids.txt — run scripts/01_build_market_id_list.sh first"
   exit 1
 fi
@@ -23,11 +23,15 @@ fetch_one () {
   echo "Fetching market ${ID}"
 
   # Market detail
-  curl -s "https://gamma-api.polymarket.com/markets/${ID}" -o "${OUT1}.tmp"
+  curl --fail --silent --show-error \
+    "https://gamma-api.polymarket.com/markets/${ID}" \
+    -o "${OUT1}.tmp"
   mv "${OUT1}.tmp" "${OUT1}"
 
   # Market tags
-  curl -s "https://gamma-api.polymarket.com/markets/${ID}/tags" -o "${OUT2}.tmp"
+  curl --fail --silent --show-error \
+    "https://gamma-api.polymarket.com/markets/${ID}/tags" \
+    -o "${OUT2}.tmp"
   mv "${OUT2}.tmp" "${OUT2}"
 
   sleep "${SLEEP}"

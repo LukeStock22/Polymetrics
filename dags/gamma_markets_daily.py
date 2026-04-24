@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-from typing import Dict, List
+from typing import Dict
 
 import pendulum
 from airflow.decorators import dag, task
@@ -46,7 +46,6 @@ def get_snowflake_hook():
 @dag(
     dag_id="gamma_markets_daily",
     schedule="0 * * * *",
-    # schedule="33 * * * *",
     start_date=pendulum.datetime(2026, 4, 7, tz="America/Chicago"),
     catchup=False,
     max_active_runs=1,

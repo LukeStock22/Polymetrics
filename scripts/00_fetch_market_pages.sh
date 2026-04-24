@@ -3,17 +3,24 @@ set -euo pipefail
 
 LIMIT="${LIMIT:-200}"
 SLEEP="${SLEEP:-0.15}"
+START_OFFSET="${START_OFFSET:-0}"
 
-fetch_pages () {
+mkdir -p data/raw/gamma/markets
+
+fetch_pages() {
   local NAME="$1"
   local URL_BASE="$2"
-  local OFFSET=412000
+  local OFFSET="${START_OFFSET}"
 
   while true; do
     local OUT="data/raw/gamma/markets/${NAME}_limit${LIMIT}_offset${OFFSET}.json"
+    local TMP_OUT="${OUT}.tmp"
     echo "GET ${OUT}"
 
-    curl -s "${URL_BASE}&limit=${LIMIT}&offset=${OFFSET}" -o "${OUT}"
+    curl --fail --silent --show-error \
+      "${URL_BASE}&limit=${LIMIT}&offset=${OFFSET}" \
+      -o "${TMP_OUT}"
+    mv "${TMP_OUT}" "${OUT}"
 
     # stop when empty array
     local COUNT
