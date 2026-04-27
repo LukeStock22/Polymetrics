@@ -156,7 +156,7 @@ The `gamma_markets_catchup` DAG was used to fetch all historical market data in 
 
 Both DAGs follow the same core data flow. They first ensure that the required Snowflake objects exist, then fetch market pages from the Gamma API for two source groups: active markets and recently closed markets within the requested window. Those JSON page files are written to disk, uploaded into the internal Snowflake stage `PANTHER_DB.RAW.GAMMA_MARKETS_STAGE`, and then loaded into the scratch table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES_STAGE`. Then the pipeline merges the data into the raw history table `PANTHER_DB.RAW.GAMMA_MARKET_PAGES` and finally upserts the latest known version of each market into `PANTHER_DB.CURATED.GAMMA_MARKETS`. This design is intentionally idempotent. Rerunning a load does not blindly duplicate data, because the scratch table is reused each run and both the raw and curated layers are maintained through merge-based upserts and duplicate checks. In the hourly DAG, the curated publication step also emits the `snowflake://PANTHER_DB/CURATED/GAMMA_MARKETS` Airflow dataset event, which allows the downstream analytics DAG to refresh after curated market data has been successfully published.
 
-The main difference between the two DAGs (not including trigger method) is how they define the ingestion window. `gamma_markets_daily` is watermark-driven. Its lower bound is usually `MAX(updated_at)` from `PANTHER_DB.CURATED.GAMMA_MARKETS`, where `updated_at` is Polymarket's own `updatedAt` value copied from the API payload (not the time we inserted the row into Snowflake or the time of the last successful Airflow run). Its upper bound is the Airflow interval end for scheduled runs. `gamma_markets_catchup` uses the same Polymarket `updatedAt` watermark as its lower bound unless full-history mode is requested, but its upper bound is the start of the current day, so it reconciles everything from the warehouse watermark through yesterday rather than just one recent interval. In both DAGs, active markets are always fetched and closed markets are only fetched for the selected window, which avoids re-scanning the entire closed-market history on every run. This improves efficiency through preventing unnecessary fetches.
+The main difference between the two DAGs (not including trigger method) is how they define the ingestion window. `gamma_markets_daily` is watermark-driven. Its lower bound is usually `MAX(updated_at)` from `PANTHER_DB.CURATED.GAMMA_MARKETS`, where `updated_at` is Polymarket's own `updatedAt` value copied from the API payload (not the time we inserted the row into Snowflake or the time of the last successful Airflow run). Its upper bound is the Airflow interval end for scheduled runs. `gamma_markets_catchup` uses the same Polymarket `updatedAt` watermark as its lower bound unless full-history mode is requested, but its upper bound is the start of the current day, so it reconciles everything from the warehouse watermark through yesterday rather than just one recent interval. In both DAGs, active markets are always fetched and closed markets are only fetched for the selected window, which avoids re-scanning the entire closed-market history on every run. This improves efficiency through preventing unnecessary fetches. If we scaled beyond the current project scope and had a way to operate with a larger rate-limit budget, we would parallelize market-page fetches across smaller time windows or partitioned request groups instead of relying on the current conservative sequential fetch pattern.
 
 If we carried this architecture into a true production environment, we would keep the split between `gamma_markets_daily` and `gamma_markets_catchup`, but we would keep the catchup DAG as an operational tool rather than a permanently scheduled second reconciliation path. The primary reason for this decision is that the hourly DAG is already watermark-driven. If a few hourly runs are missed, the next successful run does not simply continue from the previous Airflow success state. It will expand its lower bound from the warehouse watermark and therefore recovers many ordinary missed intervals automatically. Because of that design, `gamma_markets_catchup` would still be used manually in clear exception cases such as bootstrapping a fresh environment, backfilling after a schema change, or for reassurance purposes when recovering from a long-lasting outage in which the scheduled DAG missed a significant amount of runs.
 
@@ -562,7 +562,82 @@ On top of those tables, the layer builds marts that map directly to dashboard qu
 
 The analytics layer is refreshed by the `analytics_layer_refresh` Airflow DAG and uses data aware scheduling. It subscribes to two Airflow dataset assets: curated Gamma markets and curated user activity. That means the analytics build runs when upstream data changes instead of relying on a fixed schedule or manual runs.
 
-The DAG calls `build_analytics_layer.py`, which runs in `full` or `incremental` mode and then validates that the required analytics tables exist. The incremental path uses the COYOTE `_LOADED_AT` watermark to merge only new trade rows and recompute only the affected downstream slices. This keeps the build idempotent and avoids a full rebuild every time to improve performance (roughly 5x faster based on a few observations).
+The DAG calls `build_analytics_layer.py`, which runs in `full` or `incremental` mode and then validates that the required analytics tables exist. The incremental path uses the COYOTE `_LOADED_AT` watermark to merge only new trade rows and recompute only the affected downstream slices. This keeps the build idempotent and avoids a full rebuild every time to improve performance (roughly 5x faster based on a few observations). If the platform scale grew substantially, those incremental Snowpark refreshes would need to become even more selective so that only affected market or date slices were recomputed, because rebuilding large marts too frequently would become unnecessarily expensive.
+
+#figure(
+  kind: "figure",
+  supplement: [Figure],
+  table(
+    columns: (1fr),
+    stroke: none,
+    inset: 0pt,
+    align: center,
+    row-gutter: 6pt,
+
+    [#box(
+      width: 4.9in,
+      inset: 6pt,
+      radius: 4pt,
+      stroke: (paint: black, thickness: 0.8pt),
+    )[
+      #set par(justify: false)
+      #set text(size: 8.5pt)
+      #align(center)[
+        #text(weight: "bold")[Dataset-triggered schedule] \
+        Runs when curated Gamma markets or curated user activity publishes a new Airflow dataset event
+      ]
+    ]],
+
+    [#align(center)[#text(size: 13pt, weight: "bold")[↓]]],
+
+    [#box(
+      width: 4.3in,
+      inset: 6pt,
+      radius: 4pt,
+      stroke: (paint: black, thickness: 0.8pt),
+    )[
+      #set par(justify: false)
+      #set text(size: 8.5pt)
+      #align(center)[
+        #text(weight: "bold")[`validate_runtime`] \
+        Confirm build mode, config path, Python runtime, and build script are available
+      ]
+    ]],
+
+    [#align(center)[#text(size: 13pt, weight: "bold")[↓]]],
+
+    [#box(
+      width: 4.5in,
+      inset: 6pt,
+      radius: 4pt,
+      stroke: (paint: black, thickness: 0.8pt),
+    )[
+      #set par(justify: false)
+      #set text(size: 8.5pt)
+      #align(center)[
+        #text(weight: "bold")[`run_build`] \
+        Execute `build_analytics_layer.py` in `full` or `incremental` mode against Snowflake
+      ]
+    ]],
+
+    [#align(center)[#text(size: 13pt, weight: "bold")[↓]]],
+
+    [#box(
+      width: 4.8in,
+      inset: 6pt,
+      radius: 4pt,
+      stroke: (paint: black, thickness: 0.8pt),
+    )[
+      #set par(justify: false)
+      #set text(size: 8.5pt)
+      #align(center)[
+        #text(weight: "bold")[`validate_refresh`] \
+        Verify required analytics tables exist and confirm the `ANALYTICS_BUILD_STATE` watermark row
+      ]
+    ]],
+  ),
+  caption: [Task flow for `analytics_layer_refresh`. The DAG is dataset-triggered, validates its runtime, executes the Snowpark analytics build, and then checks that the expected analytics tables and build-state metadata were successfully refreshed.]
+)
 
 
 = Streamlit App and Visualization
@@ -581,7 +656,17 @@ The strongest views in the project are the ones that would be more difficult to 
 
 The `Data Availability` page is aimed more at developers and reviewers than end users. It shows inventories of source and analytics tables across `DOG_DB`, `COYOTE_DB`, and `PANTHER_DB`, along with row counts, timestamps, storage information, column metadata, and example records. It also provides transparencies into how the analytics tables are built from the source tables.
 
+#figure(
+  image("dataavailability.png", width: 95%),
+  caption: [Data Availability page.]
+)
+
 This page matters because it makes the state of the platform visible. It shows users which tables are populated, which are empty, and what data is actually available and updated.
+
+#figure(
+  image("buildlineage.png", width: 95%),
+  caption: [Build-lineage view inside the Data Availability page. ]
+)
 
 == Anomalies page
 
